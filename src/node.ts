@@ -94,6 +94,7 @@ export class Node {
         this.miner.refresh();
         this.emitChain();
       },
+      () => this.miner.getStatus().running,
     );
     try {
       await this.network.start();

@@ -14,7 +14,7 @@
  *    POST /block                     submit a block; server validates + persists
  *    GET  /stats                     informational (peer count etc.)
  *    GET  /peers                     active peer ids for browsers to dial
- *    POST /heartbeat                 browsers keep themselves in /peers
+ *    POST /heartbeat                 browsers keep themselves in /peers; mining flag tracks active miners
  */
 
 import express from 'express';
@@ -31,6 +31,10 @@ import { decodeTx, encodeTx, type Transaction } from '../src/chain/transaction.j
 
 const PORT = Number(process.env.PORT ?? 9000);
 const STALE_PEER_MS = 60_000;
+// A miner is "active" if they reported mining=true within this window. Set
+// to 3× the client heartbeat interval (30s) so a single missed heartbeat
+// doesn't make the count flicker.
+const MINING_TTL_MS = 90_000;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAIN_FILE = path.join(__dirname, 'chain.json');
 
@@ -145,12 +149,26 @@ interface PeerState {
   id: string;
   lastSeen: number;
   reportedHeight: number;
+  /**
+   * Timestamp of the most recent heartbeat where the peer reported mining=true.
+   * null = never reported mining. Compared against MINING_TTL_MS to decide
+   * whether the peer counts as "actively mining right now."
+   */
+  lastMiningAt: number | null;
 }
 const peers = new Map<string, PeerState>();
 
+function activeMinerCount(now: number): number {
+  let n = 0;
+  for (const p of peers.values()) {
+    if (p.lastMiningAt !== null && now - p.lastMiningAt < MINING_TTL_MS) n++;
+  }
+  return n;
+}
+
 peerServer.on('connection', (client: { getId(): string }) => {
   const id = client.getId();
-  peers.set(id, { id, lastSeen: Date.now(), reportedHeight: 0 });
+  peers.set(id, { id, lastSeen: Date.now(), reportedHeight: 0, lastMiningAt: null });
   console.log(`[peer] connect ${id} (total=${peers.size})`);
 });
 peerServer.on('disconnect', (client: { getId(): string }) => {
@@ -176,14 +194,16 @@ app.use((_req, res, next) => {
 });
 
 app.get('/stats', (_req, res) => {
+  const now = Date.now();
   const heights = [...peers.values()].map((p) => p.reportedHeight).sort((a, b) => b - a);
   res.json({
     peerCount: peers.size,
+    minersActive: activeMinerCount(now),
     serverHeight: chain.height,
     serverTip: bytesToHex(chain.tip.hash),
     latestHeight: Math.max(chain.height, heights[0] ?? 0),
     medianHeight: heights[Math.floor(heights.length / 2)] ?? 0,
-    serverTime: Date.now(),
+    serverTime: now,
   });
 });
 
@@ -193,17 +213,24 @@ app.get('/peers', (_req, res) => {
 });
 
 app.post('/heartbeat', (req, res) => {
-  const { id, height } = req.body as { id?: string; height?: number };
+  const { id, height, mining } = req.body as { id?: string; height?: number; mining?: boolean };
   if (typeof id !== 'string' || typeof height !== 'number') {
     res.status(400).json({ error: 'bad heartbeat' });
     return;
   }
+  const now = Date.now();
   const existing = peers.get(id);
   if (existing) {
-    existing.lastSeen = Date.now();
+    existing.lastSeen = now;
     existing.reportedHeight = height;
+    if (mining === true) existing.lastMiningAt = now;
   } else {
-    peers.set(id, { id, lastSeen: Date.now(), reportedHeight: height });
+    peers.set(id, {
+      id,
+      lastSeen: now,
+      reportedHeight: height,
+      lastMiningAt: mining === true ? now : null,
+    });
   }
   res.json({ ok: true });
 });

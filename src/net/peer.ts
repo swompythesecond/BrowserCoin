@@ -25,6 +25,8 @@ export interface PeerStatus {
   myId: string | null;
   connected: number;
   serverPeerCount: number;
+  /** Active miners across the network as last reported by the bootstrap server. */
+  serverMinersActive: number;
   bootstrapUrl: string;
 }
 
@@ -58,11 +60,14 @@ export class PeerNetwork {
     private bootstrapUrl: string,
     /** Called whenever a remote peer causes a state change we should reflect. */
     private onUpdate: () => void,
+    /** Polled each heartbeat to tell the server whether this tab is actively mining. */
+    private isMining: () => boolean = () => false,
   ) {
     this.status = {
       myId: null,
       connected: 0,
       serverPeerCount: 0,
+      serverMinersActive: 0,
       bootstrapUrl,
     };
   }
@@ -354,11 +359,16 @@ export class PeerNetwork {
       await fetch(new URL('/heartbeat', this.bootstrapUrl).toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: this.status.myId, height: this.chain.height }),
+        body: JSON.stringify({
+          id: this.status.myId,
+          height: this.chain.height,
+          mining: this.isMining(),
+        }),
       });
       const r = await fetch(new URL('/stats', this.bootstrapUrl).toString());
-      const stats = (await r.json()) as { peerCount: number };
+      const stats = (await r.json()) as { peerCount: number; minersActive?: number };
       this.status.serverPeerCount = stats.peerCount;
+      this.status.serverMinersActive = stats.minersActive ?? 0;
       this.emit();
     } catch {
       // network blip — fine, retry next interval

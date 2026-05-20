@@ -35,7 +35,10 @@ const netDot = document.querySelector<HTMLElement>('[data-stat-dot="net"]')!;
 
 function refreshTopbar(): void {
   stat('height').textContent = `height ${node.chain.height}`;
-  const peers = node.network?.getStatus().connected ?? 0;
+  const netStatus = node.network?.getStatus();
+  const peers = netStatus?.connected ?? 0;
+  const miners = netStatus?.serverMinersActive ?? 0;
+  stat('miners').textContent = `miners ${miners}`;
   stat('peers').textContent = `peers ${peers}`;
   stat('mempool').textContent = `mempool ${node.mempool.size()}`;
   const bits = leadingZeroBits(node.chain.tipDifficulty);
