@@ -1,0 +1,343 @@
+import type { Node } from '../node.js';
+import { formatAmount } from '../node.js';
+import { hashHeader } from '../chain/block.js';
+import { bytesToHex } from '../util/binary.js';
+import { TICKER } from '../brand.js';
+import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
+import { cardHeader } from './info.js';
+import type { Router } from './router.js';
+import { maxMinerWorkers } from '../miner/controller.js';
+
+const PREVIEW_ROWS = 5;
+// Shared with the dedicated Mine view so the two stay in sync across reloads.
+const THREADS_KEY = 'browsercoin:miner-threads';
+
+function clampThreads(n: number, max: number): number {
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(max, Math.floor(n)));
+}
+
+/**
+ * Dashboard / Home view. Shows compact previews of every section with "view
+ * all" links to the dedicated full-page views.
+ */
+export function mountHome(host: HTMLElement, node: Node, router: Router): () => void {
+  const view = document.createElement('div');
+  view.className = 'view';
+  view.innerHTML = `
+    <div class="view-header">
+      <h2 class="view-title">Welcome to BrowserCoin</h2>
+      <span class="view-sub">A cryptocurrency you can mine, send and explore — right here in your browser.</span>
+    </div>
+
+    <div class="grid grid-12">
+      <section class="card hero col-7" data-mount="balance">
+        <div data-slot="header"></div>
+        <div class="balance" data-w="balance">0 <span class="unit">${TICKER}</span></div>
+        <label>Your address (share this to receive coins)</label>
+        <div class="row">
+          <input data-w="address" readonly />
+          <button class="ghost small" data-w="copy">Copy</button>
+          <button class="small" data-w="send">Send →</button>
+        </div>
+        <div class="mt-md text-sm muted" data-w="nonce">nonce —</div>
+      </section>
+
+      <section class="card col-5" data-mount="miner">
+        <div data-slot="header"></div>
+        <div class="row" style="align-items:flex-start; gap:18px;">
+          <div style="flex:1">
+            <div class="label-caps">Hashrate</div>
+            <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="hashrate">0 H/s</div>
+            <div class="text-sm muted mt-sm" data-w="state">idle</div>
+          </div>
+          <button data-w="toggle">Start mining</button>
+        </div>
+        <div class="text-sm muted mt-md" data-w="eta">Press start to begin.</div>
+        <div class="mt-md">
+          <label class="text-sm">CPU power: <span data-w="pct">100%</span></label>
+          <input type="range" min="0" max="100" value="100" class="slider" data-w="slider" />
+          <label class="text-sm mt-sm">Threads: <span data-w="threads">1</span> <span class="muted">/ <span data-w="maxThreads">1</span> available</span></label>
+          <input type="range" min="1" max="1" value="1" step="1" class="slider" data-w="threadSlider" />
+        </div>
+      </section>
+
+      <section class="card col-7" data-mount="activity">
+        <div data-slot="header"></div>
+        <div class="table-scroll">
+          <table class="table">
+            <thead><tr>
+              <th>status</th><th class="col-hide-sm">dir</th><th>counterparty</th><th>amount</th><th class="col-hide-sm">when</th>
+            </tr></thead>
+            <tbody data-w="actRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card col-5" data-mount="network">
+        <div data-slot="header"></div>
+        <dl class="kv">
+          <dt>Status</dt><dd data-w="state" class="muted">connecting…</dd>
+          <dt>Peers</dt><dd data-w="peers" class="mono">0</dd>
+          <dt>Height</dt><dd data-w="height" class="mono">—</dd>
+          <dt>Server</dt><dd data-w="server" class="mono">—</dd>
+        </dl>
+      </section>
+
+      <section class="card col-6" data-mount="explorer">
+        <div data-slot="header"></div>
+        <div class="table-scroll">
+          <table class="table">
+            <thead><tr>
+              <th>height</th><th>hash</th><th>txs</th><th class="col-hide-sm">miner</th><th>time</th>
+            </tr></thead>
+            <tbody data-w="rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card col-6" data-mount="mempool">
+        <div data-slot="header"></div>
+        <div class="table-scroll">
+          <table class="table">
+            <thead><tr>
+              <th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">when</th>
+            </tr></thead>
+            <tbody data-w="memRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+  host.appendChild(view);
+
+  const mountSlot = (key: string, header: HTMLElement): void => {
+    const target = view.querySelector<HTMLElement>(`[data-mount="${key}"] [data-slot="header"]`)!;
+    target.replaceWith(header);
+  };
+
+  mountSlot('balance', cardHeader({
+    title: 'Your wallet',
+    info: {
+      title: 'Your wallet',
+      body: `Every browser gets its own wallet automatically. It's a pair of keys saved in this browser — anyone who has the private key controls the coins.\n\nShare your address to receive ${TICKER}. Back up your wallet from Settings if you don't want to lose it when you clear your browser data.`,
+    },
+    link: { label: 'Open wallet →', onClick: () => router.navigate('/wallet') },
+  }));
+  mountSlot('miner', cardHeader({
+    title: 'Mining',
+    info: {
+      title: 'Mining',
+      body: `Mining is how new ${TICKER} is created. Your browser races other browsers to solve a math puzzle for each block; the winner collects the reward.\n\nIt uses your CPU, so it'll make your laptop fan spin. You can throttle it or stop anytime.`,
+    },
+    link: { label: 'Full miner →', onClick: () => router.navigate('/mine') },
+  }));
+  mountSlot('activity', cardHeader({
+    title: 'Recent activity',
+    info: {
+      title: 'Your activity',
+      body: `Every coin you send, receive, or mine appears here. "Pending" means a transaction is in the mempool but not yet inside a block — wait for the next block to be mined for it to confirm.`,
+    },
+    link: { label: 'View all →', onClick: () => router.navigate('/wallet') },
+  }));
+  mountSlot('network', cardHeader({
+    title: 'Network',
+    info: {
+      title: 'Network',
+      body: `BrowserCoin has no central server — every tab is a full node. Your browser talks directly to other browsers over WebRTC, and a bootstrap server helps everyone find each other.`,
+    },
+  }));
+  mountSlot('explorer', cardHeader({
+    title: 'Recent blocks',
+    info: {
+      title: 'Blocks',
+      body: `Every confirmed transaction lives inside a block. New blocks arrive roughly every 2.5 minutes (depending on the network's combined hashrate).`,
+    },
+    link: { label: 'Explorer →', onClick: () => router.navigate('/explorer') },
+  }));
+  mountSlot('mempool', cardHeader({
+    title: 'Pending transactions',
+    info: {
+      title: 'Mempool',
+      body: `Transactions that have been broadcast but not yet picked up by a miner. They confirm as soon as a miner includes them in the next block.`,
+    },
+    link: { label: 'Open mempool →', onClick: () => router.navigate('/mempool') },
+  }));
+
+  const balEl = view.querySelector<HTMLElement>('[data-w="balance"]')!;
+  const addrEl = view.querySelector<HTMLInputElement>('[data-w="address"]')!;
+  const copyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy"]')!;
+  const nonceEl = view.querySelector<HTMLElement>('[data-w="nonce"]')!;
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(node.wallet.address).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => (copyBtn.textContent = 'Copy'), 1200);
+    });
+  });
+
+  view.querySelector<HTMLButtonElement>('[data-mount="balance"] [data-w="send"]')!
+    .addEventListener('click', () => router.navigate('/wallet'));
+
+  const hashrateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="hashrate"]')!;
+  const minerStateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="state"]')!;
+  const minerEtaEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="eta"]')!;
+  const toggleBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="toggle"]')!;
+  toggleBtn.addEventListener('click', () => {
+    const s = node.miner.getStatus();
+    if (s.running) node.miner.stop(); else node.miner.start();
+  });
+
+  const cpuSlider = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="slider"]')!;
+  const cpuPctEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="pct"]')!;
+  const threadSlider = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="threadSlider"]')!;
+  const threadsEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="threads"]')!;
+  const maxThreadsEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="maxThreads"]')!;
+
+  const maxThreads = maxMinerWorkers();
+  maxThreadsEl.textContent = String(maxThreads);
+  threadSlider.max = String(maxThreads);
+  if (maxThreads === 1) threadSlider.disabled = true;
+
+  // Apply persisted thread count on first paint so the home card and /mine view
+  // agree even before the user visits /mine.
+  const savedThreads = clampThreads(Number(localStorage.getItem(THREADS_KEY)) || 1, maxThreads);
+  node.miner.setWorkerCount(savedThreads);
+
+  cpuSlider.addEventListener('input', () => {
+    const pct = Number(cpuSlider.value);
+    cpuPctEl.textContent = `${pct}%`;
+    node.miner.setThrottle(pct / 100);
+  });
+  threadSlider.addEventListener('input', () => {
+    const n = clampThreads(Number(threadSlider.value), maxThreads);
+    threadsEl.textContent = String(n);
+    localStorage.setItem(THREADS_KEY, String(n));
+    node.miner.setWorkerCount(n);
+  });
+
+  const actRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="activity"] [data-w="actRows"]')!;
+
+  const netStateEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="state"]')!;
+  const netPeersEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="peers"]')!;
+  const netHeightEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="height"]')!;
+  const netServerEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="server"]')!;
+
+  const blockRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="explorer"] [data-w="rows"]')!;
+  const memRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="mempool"] [data-w="memRows"]')!;
+
+  function refresh(): void {
+    balEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${TICKER}</span>`;
+    addrEl.value = node.wallet.address;
+    nonceEl.textContent = `nonce ${node.myNonce()}`;
+
+    const rows = computeActivity(node, 200).slice(0, PREVIEW_ROWS);
+    actRowsEl.innerHTML = rows.length === 0
+      ? `<tr class="table-empty"><td colspan="5">No activity yet — share your address to receive ${TICKER}, or start mining.</td></tr>`
+      : renderActivityRows(rows);
+
+    const ps = node.network?.getStatus();
+    const ss = node.serverSync?.getStatus();
+    if (ps?.myId) { netStateEl.textContent = 'online'; netStateEl.className = 'green'; }
+    else if (ss?.reachable) { netStateEl.textContent = 'server-only'; netStateEl.className = 'muted'; }
+    else { netStateEl.textContent = 'offline'; netStateEl.className = 'red'; }
+    netPeersEl.textContent = String(ps?.connected ?? 0);
+    netHeightEl.textContent = `${node.chain.height}`;
+    if (ss) {
+      const lag = node.chain.height - ss.serverHeight;
+      const tag = ss.reachable ? (lag === 0 ? 'in sync' : lag > 0 ? `pushing (+${lag})` : `pulling (${-lag})`) : 'unreachable';
+      netServerEl.textContent = `${tag} · ${ss.serverHeight}`;
+      netServerEl.className = ss.reachable ? 'green mono' : 'red mono';
+    } else {
+      netServerEl.textContent = '—';
+    }
+
+    // Recent blocks (5).
+    const blocks: string[] = [];
+    let n = 0;
+    for (const cb of node.chain.iterateCanonical()) {
+      if (n++ >= PREVIEW_ROWS) break;
+      const h = cb.block.header;
+      const hashHex = bytesToHex(hashHeader(h)).slice(0, 10) + '…';
+      const minerHex = bytesToHex(h.miner).slice(0, 10) + '…';
+      blocks.push(`<tr>
+        <td class="mono">${h.height}</td>
+        <td class="hash">${hashHex}</td>
+        <td class="mono">${cb.block.transactions.length}</td>
+        <td class="addr col-hide-sm">${minerHex}</td>
+        <td class="muted">${blockTime(h.timestamp)}</td>
+      </tr>`);
+    }
+    blockRowsEl.innerHTML = blocks.length === 0
+      ? `<tr class="table-empty"><td colspan="5">No blocks yet.</td></tr>`
+      : blocks.join('');
+
+    // Mempool preview (5 latest).
+    const mem = node.mempool.listEntries()
+      .sort((a, b) => b.receivedAt - a.receivedAt)
+      .slice(0, PREVIEW_ROWS);
+    const myAddr = node.wallet.address;
+    if (mem.length === 0) {
+      memRowsEl.innerHTML = `<tr class="table-empty"><td colspan="4">No pending transactions.</td></tr>`;
+    } else {
+      memRowsEl.innerHTML = mem.map((e) => {
+        const fromHex = bytesToHex(e.tx.from);
+        const toHex = bytesToHex(e.tx.to);
+        const mine = fromHex === myAddr || toHex === myAddr;
+        return `<tr class="${mine ? 'row-mine' : ''}">
+          <td class="addr">${fromHex.slice(0, 8)}…${fromHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
+          <td class="addr col-hide-sm">${toHex.slice(0, 8)}…${toHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
+          <td class="mono">${formatAmount(e.tx.amount)} ${TICKER}</td>
+          <td class="muted col-hide-sm">${timeAgo(e.receivedAt)}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  function refreshMiner(): void {
+    const s = node.miner.getStatus();
+    toggleBtn.textContent = s.running ? 'Stop' : 'Start mining';
+    minerStateEl.textContent = s.running
+      ? (s.currentHeight > 0 ? `mining block #${s.currentHeight}` : 'mining…')
+      : 'idle';
+    minerStateEl.className = s.running ? 'green text-sm mt-sm' : 'text-sm muted mt-sm';
+    hashrateEl.textContent = formatHashrate(s.hashesPerSecond);
+    minerEtaEl.textContent = s.running
+      ? (s.hashesPerSecond > 0 ? `${formatHashrate(s.hashesPerSecond)} grinding — full stats on the Mine tab.` : 'measuring…')
+      : 'Press start to begin.';
+
+    // Mirror controller state so changes made on /mine show up here too. Skip
+    // overwriting while the user is actively dragging — would fight their input.
+    if (document.activeElement !== cpuSlider) {
+      const pct = Math.round(s.throttle * 100);
+      cpuSlider.value = String(pct);
+      cpuPctEl.textContent = `${pct}%`;
+    }
+    if (document.activeElement !== threadSlider) {
+      threadSlider.value = String(s.workerCount);
+      threadsEl.textContent = String(s.workerCount);
+    }
+  }
+
+  refresh();
+  refreshMiner();
+
+  const unsubChain = node.onChain(refresh);
+  const unsubWallet = node.onWallet(refresh);
+  const unsubMiner = node.miner.onStatus(refreshMiner);
+  const ticker = setInterval(refresh, 5000);
+
+  return () => {
+    unsubChain();
+    unsubWallet();
+    unsubMiner();
+    clearInterval(ticker);
+  };
+}
+
+function formatHashrate(h: number): string {
+  if (h < 1000) return `${h.toFixed(0)} H/s`;
+  if (h < 1e6) return `${(h / 1e3).toFixed(2)} kH/s`;
+  return `${(h / 1e6).toFixed(2)} MH/s`;
+}
+

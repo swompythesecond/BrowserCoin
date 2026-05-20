@@ -1,0 +1,11 @@
+node_modules
+dist
+.vite
+*.log
+.DS_Store
+.env
+.env.local
+server/dist
+server/chain.json
+.claude
+*.stackdump
