@@ -9,7 +9,7 @@ import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
 import { getAccount } from './chain/state.js';
 import { COIN } from './chain/genesis.js';
 
-const DEFAULT_BOOTSTRAP = 'http://localhost:9000';
+const DEFAULT_BOOTSTRAP = 'https://browsercoin.pauledevelopment.com';
 
 type ChainListener = () => void;
 
