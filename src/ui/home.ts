@@ -7,6 +7,7 @@ import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activ
 import { cardHeader } from './info.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
+import { renderAddressQr } from './qr.js';
 
 const PREVIEW_ROWS = 5;
 // Shared with the dedicated Mine view so the two stay in sync across reloads.
@@ -39,6 +40,10 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
           <input data-w="address" readonly />
           <button class="ghost small" data-w="copy">Copy</button>
           <button class="small" data-w="send">Send →</button>
+        </div>
+        <div class="qr-wrap mt-md">
+          <div class="qr-box" data-w="qr"></div>
+          <div class="qr-caption">Scan to send coins to this wallet.</div>
         </div>
         <div class="mt-md text-sm muted" data-w="nonce">nonce —</div>
       </section>
@@ -168,6 +173,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const addrEl = view.querySelector<HTMLInputElement>('[data-w="address"]')!;
   const copyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy"]')!;
   const nonceEl = view.querySelector<HTMLElement>('[data-w="nonce"]')!;
+  const qrEl = view.querySelector<HTMLElement>('[data-mount="balance"] [data-w="qr"]')!;
 
   copyBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(node.wallet.address).then(() => {
@@ -230,6 +236,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     balEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${TICKER}</span>`;
     addrEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
+    renderAddressQr(qrEl, node.wallet.address);
 
     const rows = computeActivity(node, 200).slice(0, PREVIEW_ROWS);
     actRowsEl.innerHTML = rows.length === 0

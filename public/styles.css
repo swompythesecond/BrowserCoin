@@ -627,11 +627,11 @@ label {
   gap: 14px;
 }
 .qr-box {
-  width: 132px;
-  height: 132px;
-  padding: 8px;
+  width: 88px;
+  height: 88px;
+  padding: 6px;
   background: #fff;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   display: grid;
   place-items: center;
   flex-shrink: 0;

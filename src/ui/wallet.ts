@@ -5,7 +5,7 @@ import { TICKER } from '../brand.js';
 import { computeActivity, filterActivity, renderActivityRows, type ActivityFilter } from './activity.js';
 import { cardHeader } from './info.js';
 import { renderPager } from './pager.js';
-import QRCode from 'qrcode';
+import { renderAddressQr } from './qr.js';
 
 const PAGE_SIZE = 25;
 
@@ -21,11 +21,6 @@ const FILTERS: Array<{ key: ActivityFilter; label: string }> = [
  * Full-page wallet: hero balance, send form, paginated activity with filter
  * chips.
  */
-/** Where the QR-share link points. Same origin as wherever the page is served. */
-function shareUrl(address: string): string {
-  return `${window.location.origin}/?to=${address}`;
-}
-
 export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchParams): () => void {
   const view = document.createElement('div');
   view.className = 'view';
@@ -178,28 +173,11 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     }
   });
 
-  // Cache the last-rendered QR address so we don't redraw on every paint().
-  let qrFor: string | null = null;
-  function renderQr(address: string): void {
-    if (qrFor === address) return;
-    qrFor = address;
-    QRCode.toString(shareUrl(address), {
-      type: 'svg',
-      margin: 1,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#0d0f17', light: '#ffffff' },
-    }).then((svg) => {
-      qrEl.innerHTML = svg;
-    }).catch(() => {
-      qrEl.innerHTML = '';
-    });
-  }
-
   function paintBalance(): void {
     balanceEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${TICKER}</span>`;
     addressEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
-    renderQr(node.wallet.address);
+    renderAddressQr(qrEl, node.wallet.address);
   }
 
   function paint(): void {
