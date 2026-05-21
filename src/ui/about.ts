@@ -1,5 +1,5 @@
 /**
- * About page. Long-form vision content — written in a deliberately factual,
+ * About page. Long-form vision content  written in a deliberately factual,
  * non-promotional voice. Structural facts are laid out; the reader does the
  * math themselves. No "this could be valuable", no roadmap, no pitch.
  */
@@ -25,7 +25,7 @@ export function mountAbout(host: HTMLElement): () => void {
         Somewhere along the way, the thing most people came to call "crypto"
         stopped being about that. It became a number that goes up or down on a
         chart. The technology became invisible to the people who own the asset.
-        New coins kept getting launched that weren't even decentralized —
+        New coins kept getting launched that weren't even decentralized 
         controlled by a foundation, a multisig of insiders, a "DAO" nobody can
         vote against. Tokens with central authorities defeat the entire point
         of why this technology is interesting in the first place.
@@ -34,13 +34,13 @@ export function mountAbout(host: HTMLElement): () => void {
       <p>
         I built BrowserCoin to go back to what crypto actually is, and to make
         it easy enough that anyone can be part of it. Open a webpage, you're
-        in — no login, no signup, no nothing, because real crypto doesn't
+        in  no login, no signup, no nothing, because real crypto doesn't
         require any. It can be completely anonymous. Find a block on your
         laptop, see it appear in the explorer with your address on it. Send
         coins to a friend by showing them a QR code on your phone.
         <strong>There is no market where you can buy BROWSER with dollars.</strong>
         The only way to get coins is to mine them, or to have someone who
-        already mined some send them to you. Nobody is selling you anything.
+        already mined some send them to you. Nobody is selling you anything.<strong> This is not about making money this is about enjoying the technology.</strong>
       </p>
 
       <p>
@@ -63,7 +63,7 @@ export function mountAbout(host: HTMLElement): () => void {
         Participating in Bitcoin back then was hard. This isn't. Everyone who
         opens the page takes part in the experiment and makes the network
         stronger. It has never been easier to be part of a crypto network and
-        enjoy it for what it is — a fascinating technology. Not a
+        enjoy it for what it is  a fascinating technology. Not a
         get-rich-quick scheme.
       </p>
 
@@ -100,7 +100,7 @@ export function mountAbout(host: HTMLElement): () => void {
       </ul>
 
       <p>
-        If those numbers look familiar — yes, the monetary policy is the same
+        If those numbers look familiar  yes, the monetary policy is the same
         shape as Bitcoin's. Same supply, same halving schedule, four times the
         throughput. That's intentional. An homage to Bitcoin if you want, but
         more importantly, it's a set of parameters that are widely understood
@@ -123,7 +123,7 @@ export function mountAbout(host: HTMLElement): () => void {
         of memory and 2 iterations per attempt. Argon2id is <em>memory-hard</em>:
         every hash needs a large chunk of RAM, and the bottleneck is memory
         bandwidth, not raw compute. GPUs and custom hardware can't accelerate
-        it the way they can accelerate SHA-256 — they have plenty of compute
+        it the way they can accelerate SHA-256  they have plenty of compute
         but not enough memory bandwidth per core. The result: mining stays
         roughly fair across laptops, phones, and desktops. The gap between a
         $20k server and a $400 laptop is small enough that everyone has a
@@ -135,7 +135,7 @@ export function mountAbout(host: HTMLElement): () => void {
       <p>
         21M cap, 50-coin reward, halving every 210,000 blocks. These numbers
         match Bitcoin's exactly. The supply schedule isn't being innovated on
-        here — Bitcoin's monetary policy is widely understood, the math is
+        here  Bitcoin's monetary policy is widely understood, the math is
         well-known, and copying it makes BrowserCoin instantly legible to
         anyone who's looked at how Bitcoin works. The only deliberate
         difference is the block time (2.5 minutes vs 10), which is 4× faster.
@@ -143,7 +143,7 @@ export function mountAbout(host: HTMLElement): () => void {
 
       <h4>Why 2.5-minute blocks</h4>
       <p>
-        Fast enough that the experiment feels alive — you don't wait ten
+        Fast enough that the experiment feels alive  you don't wait ten
         minutes after starting to mine to find out whether anything is
         happening. Slow enough that block propagation across a peer-to-peer
         WebRTC network doesn't cause widespread orphaning. The 4× speedup
@@ -158,7 +158,7 @@ export function mountAbout(host: HTMLElement): () => void {
         every block over a 50-block sliding window. The retargeting uses
         median-time-past on both ends of the window (a single lying timestamp
         moves the median by less than 1/11 of the lie), asymmetric step caps
-        (target can shrink by /2 per block but grow by ×4 — so attackers
+        (target can shrink by /2 per block but grow by ×4  so attackers
         can't briefly spike difficulty and leave honest miners stuck), and
         an emergency drop if blocks stall for more than 6× the target time
         (so the chain can recover from a sudden hashrate collapse without
@@ -167,7 +167,7 @@ export function mountAbout(host: HTMLElement): () => void {
 
       <h4>Why Ed25519 signatures</h4>
       <p>
-        Fast, deterministic (no malleable signatures — every valid signature
+        Fast, deterministic (no malleable signatures  every valid signature
         for a given message is identical), well-audited, and the library is
         small enough to load in a browser without slowing the page. Bitcoin
         uses ECDSA which works but is slower and historically had
@@ -205,7 +205,7 @@ export function mountAbout(host: HTMLElement): () => void {
         but it defeats the entire point of having a permissionless consensus
         system. BrowserCoin explicitly does not take that path. The defense
         against attacks is the same one Bitcoin actually relies on in
-        practice — making an attack expensive enough that nobody bothers —
+        practice  making an attack expensive enough that nobody bothers 
         adapted to a network without ASICs and without a fiat price.
         Memory-hard PoW raises the per-hash cost; network scale raises the
         total cost; hardened retargeting closes the cheaper attack paths.
@@ -215,7 +215,7 @@ export function mountAbout(host: HTMLElement): () => void {
       <h4>Why the bootstrap server is replaceable</h4>
       <p>
         Peer discovery is the one part of a fully-decentralized browser
-        network that needs a stable starting point — browsers can't dial each
+        network that needs a stable starting point  browsers can't dial each
         other without first knowing each other's WebRTC IDs. The bootstrap
         server provides that initial directory, and as a convenience also
         keeps a copy of the chain so a brand-new tab can catch up without
@@ -230,7 +230,7 @@ export function mountAbout(host: HTMLElement): () => void {
         <li>Click <strong>Mine</strong>. Your CPU starts grinding Argon2id hashes. When one lands below the current difficulty target, you've found a block and earned 50 BROWSER.</li>
         <li>Show someone the <strong>QR code</strong> next to your address. They can scan it to send you coins.</li>
         <li>Tell a friend.</li>
-        <li>And most importantly, have fun. Crypto is a neat technology — time to honor it by taking part.</li>
+        <li>And most importantly, have fun. Crypto is a neat technology  time to honor it by taking part. Not by trying to make profit.</li>
       </ol>
 
       <h3>The code</h3>
