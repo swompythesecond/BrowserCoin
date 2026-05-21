@@ -606,6 +606,21 @@ label {
   color: var(--text);
   letter-spacing: -0.2px;
 }
+.about-body h3:first-child { margin-top: 0; }
+.about-body h4 {
+  margin: 18px 0 6px;
+  font-size: 0.92rem;
+  color: var(--text);
+  font-weight: 600;
+}
+.about-body code {
+  font-family: var(--mono);
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.86em;
+}
 .about-body p {
   margin: 0 0 12px;
 }

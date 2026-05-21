@@ -12,93 +12,217 @@ export function mountAbout(host: HTMLElement): () => void {
     </div>
 
     <article class="about-body">
-      <p class="lead">
-        BrowserCoin is a cryptocurrency that runs entirely in your browser.
-        No installer. No exchange account. No wallet extension. Open the page,
-        you have a wallet. Click <strong>Mine</strong>, your computer starts
-        looking for blocks. Find one, the network credits you 50 BROWSER.
+      <h3>Why this exists</h3>
+
+      <p>
+        Crypto is a genuinely interesting piece of technology. A network of
+        strangers who don't trust each other can agree on the state of a shared
+        ledger, with no one in charge, using nothing but math and electricity.
+        That's a real thing. It works.
       </p>
 
       <p>
-        This is an experiment. The coin has no price, no exchange listing,
-        no fiat market, and probably never will. Nobody is selling you anything.
+        Somewhere along the way, the thing most people came to call "crypto"
+        stopped being about that. It became a number that goes up or down on a
+        chart. The technology became invisible to the people who own the asset.
+        New coins kept getting launched that weren't even decentralized —
+        controlled by a foundation, a multisig of insiders, a "DAO" nobody can
+        vote against. Tokens with central authorities defeat the entire point
+        of why this technology is interesting in the first place.
+      </p>
+
+      <p>
+        I built BrowserCoin to go back to what crypto actually is, and to make
+        it easy enough that anyone can be part of it. Open a webpage, you're
+        in. Find a block on your laptop, see it appear in the explorer with
+        your address on it. Send coins to a friend by showing them a QR code
+        on your phone. <strong>There is no market where you can buy BROWSER
+        with dollars.</strong> The only way to get coins is to mine them, or
+        to have someone who already mined some send them to you. Nobody is
+        selling you anything.
+      </p>
+
+      <p>
+        This is the participatory experiment. If a lot of people join in, the
+        network gets harder to attack and the chain starts to mean something.
+        If only a few do, it was still a fun experiment in seeing what's
+        possible. The coin costs nothing to mine besides electricity. There is
+        no version of this where someone gets hurt.
+      </p>
+
+      <p>
+        Bitcoin in 2009 was a handful of people running a client on their
+        personal computers, finding blocks, getting 50 BTC for their trouble.
+        Nobody had bought any. There was no chart. They were there because the
+        experiment was interesting. That moment is over for Bitcoin. It isn't
+        over for new chains.
+      </p>
+
+      <h3>Fully decentralized</h3>
+
+      <p>This isn't a marketing line. It's a constraint the code enforces:</p>
+
+      <ul>
+        <li>No founder allocation. No presale. No team tokens. No premine. Coins exist only because someone mined them.</li>
+        <li>No central authority signs blocks. No multisig of insiders can override consensus. No "DAO" votes on the chain.</li>
+        <li>No checkpoint server that can rewrite history.</li>
+        <li>
+          The bootstrap server is a tiny helper that lets browsers find each
+          other and keeps an optional backup of the chain. It cannot sign
+          blocks, override consensus, or mint coins. If you don't trust the
+          default one, point your client at any other under Settings, or run
+          your own with <code>npm run server</code>.
+        </li>
+      </ul>
+
+      <p>
+        The code is open source under MIT. Read it. Run it. Fork it. The math
+        doesn't care who you are.
       </p>
 
       <h3>The rules</h3>
+
       <ul>
         <li>Total supply: <strong>21,000,000 BROWSER</strong>, ever.</li>
         <li>Block reward: <strong>50 BROWSER</strong>, halving every 210,000 blocks (~1 year at target pace).</li>
         <li>Target block time: <strong>2.5 minutes</strong>.</li>
         <li>Proof-of-work: <strong>memory-hard Argon2id (64 MB, 2 iterations)</strong>. Mineable on a laptop or phone. Hostile to GPUs and server farms.</li>
-        <li>Account model ledger, Ed25519 signatures, 256 KB block cap, per-byte minimum fee.</li>
+        <li>Account-model ledger, Ed25519 signatures, 256 KB block cap, per-byte minimum fee.</li>
       </ul>
 
       <p>
         If those numbers look familiar — yes, the monetary policy is the same
-        shape as Bitcoin's. Same supply, same halving schedule, four times
-        the throughput. That's intentional.
+        shape as Bitcoin's. Same supply, same halving schedule, four times the
+        throughput. That's intentional.
       </p>
 
-      <h3>What's not here</h3>
-      <ul>
-        <li>No founder allocation.</li>
-        <li>No presale.</li>
-        <li>No team tokens.</li>
-        <li>No premine.</li>
-        <li>No central authority signing blocks.</li>
-        <li>No checkpoint server that can override consensus.</li>
-        <li>No "tokenomics whitepaper" beyond what's on this page.</li>
-      </ul>
-      <p>Coins come into existence one way: someone mined them.</p>
+      <h3>Design decisions</h3>
+
+      <p>
+        None of the technical choices in BrowserCoin are arbitrary. The small
+        things have reasons.
+      </p>
+
+      <h4>Why mining uses your CPU, not a GPU or ASIC</h4>
+      <p>
+        The hash function is <strong>Argon2id</strong>, configured with 64 MB
+        of memory and 2 iterations per attempt. Argon2id is <em>memory-hard</em>:
+        every hash needs a large chunk of RAM, and the bottleneck is memory
+        bandwidth, not raw compute. GPUs and custom hardware can't accelerate
+        it the way they can accelerate SHA-256 — they have plenty of compute
+        but not enough memory bandwidth per core. The result: mining stays
+        roughly fair across laptops, phones, and desktops. The gap between a
+        $20k server and a $400 laptop is small enough that everyone has a
+        real chance of finding blocks. The cost is that your laptop fan spins;
+        that's the price of egalitarian mining.
+      </p>
+
+      <h4>Why the monetary policy is Bitcoin-shaped</h4>
+      <p>
+        21M cap, 50-coin reward, halving every 210,000 blocks. These numbers
+        match Bitcoin's exactly. The supply schedule isn't being innovated on
+        here — Bitcoin's monetary policy is widely understood, the math is
+        well-known, and copying it makes BrowserCoin instantly legible to
+        anyone who's looked at how Bitcoin works. The only deliberate
+        difference is the block time (2.5 minutes vs 10), which is 4× faster.
+      </p>
+
+      <h4>Why 2.5-minute blocks</h4>
+      <p>
+        Fast enough that the experiment feels alive — you don't wait ten
+        minutes after starting to mine to find out whether anything is
+        happening. Slow enough that block propagation across a peer-to-peer
+        WebRTC network doesn't cause widespread orphaning. The 4× speedup
+        keeps the network feeling responsive without breaking consensus.
+      </p>
+
+      <h4>Why per-block difficulty retargeting</h4>
+      <p>
+        Bitcoin retargets every 2,016 blocks (~2 weeks) because its hashrate
+        is enormous and stable. A browser network's hashrate can swing 100×
+        when a few tabs open or close. BrowserCoin recalculates difficulty
+        every block over a 50-block sliding window. The retargeting uses
+        median-time-past on both ends of the window (a single lying timestamp
+        moves the median by less than 1/11 of the lie), asymmetric step caps
+        (target can shrink by /2 per block but grow by ×4 — so attackers
+        can't briefly spike difficulty and leave honest miners stuck), and
+        an emergency drop if blocks stall for more than 6× the target time
+        (so the chain can recover from a sudden hashrate collapse without
+        stalling for hours).
+      </p>
+
+      <h4>Why Ed25519 signatures</h4>
+      <p>
+        Fast, deterministic (no malleable signatures — every valid signature
+        for a given message is identical), well-audited, and the library is
+        small enough to load in a browser without slowing the page. Bitcoin
+        uses ECDSA which works but is slower and historically had
+        signature-malleability bugs that took years to clean up. Ed25519 was
+        the right call for a new chain in 2025.
+      </p>
+
+      <h4>Why an account model, not UTXO</h4>
+      <p>
+        Ethereum-style <code>{balance, nonce}</code> per address rather than
+        Bitcoin's unspent-transaction-output model. State is smaller, simpler
+        to implement, and easier for a browser to keep in memory. The
+        downside is that account models have slightly worse privacy properties
+        than UTXO; for an experiment with no fiat market, that tradeoff is
+        fine.
+      </p>
+
+      <h4>Why money is <code>bigint</code> everywhere</h4>
+      <p>
+        JavaScript's <code>Number</code> only has 53 bits of integer precision
+        and overflows silently. The famous Bitcoin 2010 value-overflow bug
+        (CVE-2010-5139) was an integer wrap in a signed 64-bit accumulator
+        that briefly let someone create 184 billion BTC out of nothing.
+        BrowserCoin uses native <code>bigint</code> for every balance, amount,
+        fee, and intermediate sum. The bug class is structurally impossible.
+        Defense in depth on top of that: transactions explicitly reject any
+        amount or fee greater than <code>MAX_MONEY</code> (21M BROWSER).
+      </p>
+
+      <h4>Why no central authority and no checkpoint server</h4>
+      <p>
+        Some chains defend against 51% attacks by running a "soft checkpoint"
+        service: a trusted operator signs the chain tip every few minutes,
+        and clients refuse reorgs that bury a signed checkpoint. It works,
+        but it defeats the entire point of having a permissionless consensus
+        system. BrowserCoin explicitly does not take that path. The defense
+        against attacks is the same one Bitcoin actually relies on in
+        practice — making an attack expensive enough that nobody bothers —
+        adapted to a network without ASICs and without a fiat price.
+        Memory-hard PoW raises the per-hash cost; network scale raises the
+        total cost; hardened retargeting closes the cheaper attack paths.
+        It's an honest tradeoff.
+      </p>
+
+      <h4>Why the bootstrap server is replaceable</h4>
+      <p>
+        Peer discovery is the one part of a fully-decentralized browser
+        network that needs a stable starting point — browsers can't dial each
+        other without first knowing each other's WebRTC IDs. The bootstrap
+        server provides that initial directory, and as a convenience also
+        keeps a copy of the chain so a brand-new tab can catch up without
+        waiting for peers to come online. Its role is purely informational.
+        Swap it under Settings → Bootstrap server, or run your own.
+      </p>
 
       <h3>How to take part</h3>
+
       <ol>
         <li>Open <strong>browsercoin.org</strong>. You'll get a wallet on first visit, stored in your browser. Back it up under Settings.</li>
-        <li>Click <strong>Mine</strong>. Your CPU starts grinding Argon2id hashes. When one lands below the current difficulty target, you've found a block.</li>
+        <li>Click <strong>Mine</strong>. Your CPU starts grinding Argon2id hashes. When one lands below the current difficulty target, you've found a block and earned 50 BROWSER.</li>
         <li>Show someone the <strong>QR code</strong> next to your address. They can scan it to send you coins.</li>
         <li>Tell a friend.</li>
       </ol>
 
-      <p>
-        The bootstrap server is a small Node process that helps browsers find
-        each other and keeps an optional backup of the chain. It can't sign
-        blocks, can't override consensus, and can't mint coins. You can swap
-        it for any other bootstrap server under Settings, or run your own.
-      </p>
-
-      <h3>Why this exists</h3>
-      <p>
-        Most people who own cryptocurrency have never participated in one.
-        They bought a number on an exchange. They never set up a node, never
-        mined a block, never saw consensus code run. The thing they own is,
-        to them, just a price.
-      </p>
-      <p>
-        Bitcoin in 2009 was a few people running a client on their personal
-        computers, finding blocks, getting 50 BTC for their trouble. Nobody
-        had bought any. There was no chart. They were there because the
-        experiment was interesting.
-      </p>
-      <p>
-        That moment is over for Bitcoin. It isn't over for new chains.
-      </p>
-      <p>
-        BrowserCoin is an attempt to make participation easy enough that the
-        experiment is reachable again. Open a webpage, you're in. Run it on
-        a phone on the bus. Find a block. See your block in the explorer
-        with your address on it.
-      </p>
-      <p>
-        If a lot of people end up participating, the network gets harder to
-        attack and the chain starts to mean something. If only a few do, it
-        was still a fun experiment. The coin costs nothing to mine besides
-        electricity, and nobody is selling it to you. There's no version of
-        this where someone gets hurt.
-      </p>
-
       <h3>The code</h3>
+
       <p>
-        MIT-licensed. The full client, server, consensus rules, and tests live at
+        MIT-licensed. The full client, server, consensus rules, and tests
+        live at
         <a href="https://github.com/swompythesecond/BrowserCoin" target="_blank" rel="noopener noreferrer">github.com/swompythesecond/BrowserCoin</a>.
         Small enough to actually read.
       </p>
