@@ -17,20 +17,24 @@
  * helpers, not authorities.
  */
 
-const PROD_HELPER = 'https://browsercoin.pauledevelopment.com';
-
 /**
  * The hardcoded defaults are intentionally short. They're the seed set — once
  * the community runs more helpers, add them here via a PR. Per the project's
  * "no authority" framing, distribution is via repo + release rather than an
  * inter-server gossip protocol (which would need a trust model).
+ *
+ * Two independent hosts on each side so a single-machine outage doesn't take
+ * out new-client bootstrap. Signaling URLs are https; PeerJS upgrades to wss
+ * internally (see `src/net/peer.ts:spawnPeer`).
  */
 const PROD_API_SERVERS: string[] = [
-  PROD_HELPER,
+  'https://api1.browsercoin.org',
+  'https://api2.browsercoin.org',
 ];
 
 const PROD_SIGNALING_SERVERS: string[] = [
-  PROD_HELPER,
+  'https://peer1.browsercoin.org',
+  'https://peer2.browsercoin.org',
 ];
 
 /**
