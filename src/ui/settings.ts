@@ -3,6 +3,7 @@ import { generateKeyPair } from '../crypto/keys.js';
 import type { Node } from '../node.js';
 import { cardHeader } from './info.js';
 import { defaultServerLists, parseServerInput } from '../net/servers.js';
+import { clearAll } from '../storage/idb.js';
 
 export function mountSettings(host: HTMLElement, node: Node): () => void {
   const view = document.createElement('div');
@@ -57,6 +58,20 @@ https://server2.example"></textarea>
         </div>
       </section>
 
+      <section class="card col-2" data-mount="devtools">
+        <div data-slot="header"></div>
+        <p class="text-sm muted" style="margin:0 0 12px;">
+          During development it's easy to forget what state this tab has cached.
+          Clearing the chain cache wipes the locally-stored blocks (IndexedDB)
+          so the next reload pulls a fresh chain from the helper servers.
+          Your wallet, server lists, and other preferences are kept.
+        </p>
+        <div class="row">
+          <button class="ghost danger" data-w="clear-cache">Clear chain cache and reload</button>
+        </div>
+        <div class="text-sm mt-sm" data-w="clear-msg"></div>
+      </section>
+
       <section class="card col-2" data-mount="peerid">
         <div data-slot="header"></div>
         <p class="text-sm muted" style="margin:0 0 12px;">
@@ -97,6 +112,13 @@ https://server2.example"></textarea>
     info: {
       title: 'Helper servers',
       body: `BrowserCoin is end-to-end peer-to-peer — the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper — the URLs are public.`,
+    },
+  }));
+  view.querySelector<HTMLElement>('[data-mount="devtools"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Developer · reset',
+    info: {
+      title: 'Clearing the chain cache',
+      body: `Drops every block this tab has stored in IndexedDB and reloads the page. On startup the node will pull the chain fresh from the helper servers, just like a brand-new browser would.\n\nUse this when you've changed something at the chain layer (consensus rules, genesis params, PoW salt) and want the local cache to stop replaying old blocks that the new code may reject.\n\nThis does NOT delete your wallet or server lists — those are stored in localStorage, not IndexedDB. To wipe the wallet too, use Export key above first, then clear browser site data manually.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="peerid"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -227,6 +249,23 @@ https://server2.example"></textarea>
     const kp = generateKeyPair();
     node.setWallet(kp);
     flash(msg, 'New wallet generated.', 'green');
+  });
+
+  const clearCacheBtn = view.querySelector<HTMLButtonElement>('[data-w="clear-cache"]')!;
+  const clearMsg = view.querySelector<HTMLElement>('[data-w="clear-msg"]')!;
+  clearCacheBtn.addEventListener('click', async () => {
+    if (!confirm('Clear the local chain cache and reload? Your wallet stays, but every cached block will be re-pulled from the helper servers on next startup.')) return;
+    clearCacheBtn.disabled = true;
+    flash(clearMsg, 'Clearing IndexedDB…', 'muted');
+    try {
+      await clearAll();
+      flash(clearMsg, 'Cache cleared. Reloading…', 'green');
+      // Short pause so the user sees the confirmation before the reload.
+      setTimeout(() => window.location.reload(), 400);
+    } catch (e) {
+      clearCacheBtn.disabled = false;
+      flash(clearMsg, `Failed: ${(e as Error).message}`, 'red');
+    }
   });
 
   return () => { unsubNet(); };

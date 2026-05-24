@@ -270,6 +270,12 @@ export class ServerSync {
       }
       this.status.serverHeight = tip.height;
       this.status.lastSyncedAt = Date.now();
+      // Emit once we know the target so the sync overlay can show progress
+      // (local X / server Y) and switch to the 'verifying' phase BEFORE the
+      // pullFrom loop blocks for seconds on Argon2id verification. Without
+      // this, the user stares at "Connecting · local 300 / server —" for the
+      // entire bulk catchup, then it snaps to ready with no progress shown.
+      this.emit();
 
       const ourHeight = this.chain.height;
       const ourTipHex = bytesToHex(this.chain.tip.hash);
@@ -367,6 +373,10 @@ export class ServerSync {
       if (appliedThisRound === -1) continue;
       if (appliedThisRound === 0) break;
       cursor += body.blocks.length;
+      // Notify listeners between batches so the sync overlay's progress bar
+      // and local/target counters advance live during a multi-batch pull —
+      // not just at the end of the whole loop.
+      if (appliedThisRound > 0) this.emit();
     }
     return anyAdded;
   }
