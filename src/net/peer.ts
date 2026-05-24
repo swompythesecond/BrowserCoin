@@ -1,11 +1,12 @@
 import Peer, { type DataConnection } from 'peerjs';
 import { CHAIN_ID } from '../chain/genesis.js';
-import { bytesToHex } from '../util/binary.js';
+import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Blockchain } from '../chain/blockchain.js';
 import type { Block } from '../chain/block.js';
-import { hashHeader } from '../chain/block.js';
+import { decodeBlock, encodeBlock, hashHeader } from '../chain/block.js';
 import type { Mempool } from '../chain/mempool.js';
 import { txHash, type Transaction } from '../chain/transaction.js';
+import type { ServerSync } from './serverSync.js';
 import {
   decodeBlockMsg,
   decodeTxMsg,
@@ -20,28 +21,71 @@ const HEARTBEAT_MS = 30_000;
 const TX_REBROADCAST_MS = 15_000;
 const PEER_PREFIX = 'browsercoin-';
 const MAX_ORPHANS = 2048;
+const DIAL_TIMEOUT_MS = 8_000;
+
+/**
+ * Public STUN servers used to discover our reflexive (NAT-mapped) address.
+ * Without these, browsers behind almost any NAT can't establish direct WebRTC
+ * connections — they only know their RFC1918 LAN address, which is useless to
+ * a remote peer. STUN lifts the easy-NAT majority into the direct-connect
+ * path; the residual (symmetric NAT) is expected to fall back to the manual
+ * peer-ID handshake rather than a TURN relay — the project explicitly avoids
+ * centralized relay infrastructure.
+ *
+ * Multiple servers are listed for redundancy; the browser races them. They're
+ * STUN-only (lightweight, stateless, no traffic relay), so even though they
+ * live at third parties they don't see or carry any chain data.
+ */
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+];
+
+export interface SignalingPeerStatus {
+  url: string;
+  /** True once PeerJS's WebSocket reached `open` for this signaling server. */
+  open: boolean;
+}
 
 export interface PeerStatus {
   myId: string | null;
+  /** Count of direct WebRTC connections currently established. */
   connected: number;
   serverPeerCount: number;
-  /** Active miners across the network as last reported by the bootstrap server. */
+  /** Active miners across the network as last reported by helper servers. */
   serverMinersActive: number;
-  bootstrapUrl: string;
+  /** Per-signaling-server liveness so the UI can show "K/L signaling up." */
+  signalingServers: SignalingPeerStatus[];
 }
 
 /**
- * Manages the local browser's PeerJS identity, the live connections to other
- * browser nodes, and the gossip plumbing in/out.
+ * Manages the local browser's PeerJS identity across N independently-operated
+ * signaling servers, the live direct WebRTC connections to other browser
+ * nodes, and the gossip plumbing in/out.
  *
- * On open:
- *   1. Connect to the signaling server, register our peer ID.
- *   2. Pull `/peers` to learn current peer IDs, dial a handful.
+ * One Peer instance per signaling server, all sharing the **same peer ID**.
+ * That way a friend who has our ID can reach us via any signaling server
+ * that's still alive — and once any WebRTC channel opens, the signaling
+ * server is irrelevant to that connection's continued operation.
+ *
+ * On start:
+ *   1. Spawn one PeerJS client per signaling server; resolve as soon as any
+ *      one opens.
+ *   2. Pull a unioned `/peers` list from all helper API servers, dial a
+ *      handful.
  *   3. Whenever a new block or tx is added locally, broadcast to all peers.
- *   4. Heartbeat to /heartbeat every 30s so the server keeps us in the list.
+ *   4. Heartbeat every 30s — fan out to all helper API servers.
  */
 export class PeerNetwork {
-  private peer: Peer | null = null;
+  /** Per-signaling-server PeerJS clients, keyed by signaling base URL. */
+  private peers = new Map<string, Peer>();
+  /** Track which signaling Peers reached `open`. Used for UI status surface. */
+  private opened = new Set<string>();
+  /** Single stable peer ID, reused across every Peer instance. */
+  private myId: string | null = null;
+
   private connections = new Map<string, DataConnection>();
   private status: PeerStatus;
   private statusListeners = new Set<(s: PeerStatus) => void>();
@@ -53,14 +97,28 @@ export class PeerNetwork {
    * what lets two divergent chains reconcile — we walk backwards link-by-link.
    */
   private orphans = new Map<string, Block>();
+  /**
+   * Peer IDs we've learned about via gossip (or restored from IDB on startup)
+   * but haven't necessarily connected to yet. When we drop below MIN_PEERS we
+   * try these *before* falling back to the helper servers' /peers list. The
+   * whole point: knowing one peer should be enough to find the rest of the
+   * mesh, without ever needing the helper servers.
+   */
+  private candidatePool = new Set<string>();
+  /** IDs we've already tried this session — avoid dialing the same dead peer in a loop. */
+  private dialedThisSession = new Set<string>();
+  /** Notified whenever a peer ID is observed (live or learned) so Node can persist it. */
+  private peerSeenListeners = new Set<(id: string) => void>();
 
   constructor(
     private chain: Blockchain,
     private mempool: Mempool,
-    private bootstrapUrl: string,
+    private signalingServers: string[],
+    /** Used for /heartbeat fan-out and /peers union — owns the API server list. */
+    private serverSync: ServerSync,
     /** Called whenever a remote peer causes a state change we should reflect. */
     private onUpdate: () => void,
-    /** Polled each heartbeat to tell the server whether this tab is actively mining. */
+    /** Polled each heartbeat to tell helpers whether this tab is actively mining. */
     private isMining: () => boolean = () => false,
   ) {
     this.status = {
@@ -68,17 +126,71 @@ export class PeerNetwork {
       connected: 0,
       serverPeerCount: 0,
       serverMinersActive: 0,
-      bootstrapUrl,
+      signalingServers: signalingServers.map((url) => ({ url, open: false })),
     };
   }
 
   getStatus(): PeerStatus {
-    return { ...this.status };
+    return { ...this.status, signalingServers: this.status.signalingServers.map((s) => ({ ...s })) };
   }
 
   onStatus(fn: (s: PeerStatus) => void): () => void {
     this.statusListeners.add(fn);
     return () => this.statusListeners.delete(fn);
+  }
+
+  /** Subscribe to "peer ID observed" events. Used by Node to persist to IDB. */
+  onPeerSeen(fn: (id: string) => void): () => void {
+    this.peerSeenListeners.add(fn);
+    return () => this.peerSeenListeners.delete(fn);
+  }
+
+  /**
+   * Seed the candidate pool from IDB on startup. Called by Node before
+   * `start()` so the first dial-pass can prefer cached peers over the helper
+   * servers' lists. Failed dials evict naturally.
+   */
+  seedCandidates(ids: string[]): void {
+    for (const id of ids) {
+      if (id !== this.myId) this.candidatePool.add(id);
+    }
+  }
+
+  /**
+   * Manually dial a single peer by ID. The escape hatch when both WebRTC
+   * bootstrap and the server list don't work — users paste each other's IDs
+   * in (copied from Discord, Signal, etc.). Resolves to whether the
+   * connection opened within the timeout.
+   *
+   * Tries each registered signaling Peer in sequence: a peer might only be
+   * discoverable via signaling server X, so dialing via signaling Y would
+   * silently fail.
+   */
+  async dialPeer(id: string, timeoutMs = DIAL_TIMEOUT_MS): Promise<boolean> {
+    if (!this.myId) return false;
+    if (id === this.myId) return false;
+    if (this.connections.has(id)) return true;
+    if (this.peers.size === 0) return false;
+
+    for (const peer of this.peers.values()) {
+      const ok = await new Promise<boolean>((resolve) => {
+        let settled = false;
+        const done = (v: boolean): void => { if (!settled) { settled = true; resolve(v); } };
+        const timer = setTimeout(() => done(false), timeoutMs);
+        try {
+          const conn = peer.connect(id, { reliable: true });
+          conn.on('open', () => { clearTimeout(timer); done(true); });
+          conn.on('error', () => { clearTimeout(timer); done(false); });
+          this.adoptConnection(conn);
+        } catch {
+          clearTimeout(timer);
+          done(false);
+        }
+      });
+      if (ok) return true;
+      // Otherwise try the next signaling server.
+    }
+    return false;
   }
 
   private emit(): void {
@@ -87,29 +199,27 @@ export class PeerNetwork {
   }
 
   async start(): Promise<void> {
-    const url = new URL(this.bootstrapUrl);
-    const myId = PEER_PREFIX + Math.random().toString(36).slice(2, 12);
-    this.peer = new Peer(myId, {
-      host: url.hostname,
-      port: Number(url.port) || (url.protocol === 'https:' ? 443 : 80),
-      path: '/peerjs',
-      secure: url.protocol === 'https:',
-    });
+    if (this.signalingServers.length === 0) {
+      // No signaling configured — nothing we can do for new connections. Existing
+      // already-formed connections (if any) would survive, but at startup there
+      // are none. Surface as "not started" and let the caller handle.
+      throw new Error('no signaling servers configured');
+    }
 
-    await new Promise<void>((resolve, reject) => {
-      this.peer!.on('open', (id) => {
-        this.status.myId = id;
-        this.emit();
-        resolve();
-      });
-      this.peer!.on('error', (err) => {
-        console.warn('[peer] error', err.type, err.message);
-        if (!this.status.myId) reject(err);
-      });
-    });
+    // One stable ID reused across every signaling Peer instance, so a cached/
+    // shared ID resolves to the same browser regardless of which signaling
+    // server the dialer uses.
+    this.myId = PEER_PREFIX + Math.random().toString(36).slice(2, 12);
+    this.status.myId = this.myId;
 
-    this.peer!.on('connection', (conn) => this.adoptConnection(conn));
+    // Spawn one Peer per signaling server. We resolve start() as soon as the
+    // first one opens — others continue connecting in the background. Reject
+    // only if every single one fails.
+    const opens = this.signalingServers.map((url) => this.spawnPeer(url));
+    await firstSuccess(opens, 'all signaling servers unreachable');
 
+    // After at least one signaling Peer is live, kick off the first peer-
+    // discovery dial pass and the periodic background tasks.
     await this.dialFromBootstrap();
 
     this.heartbeatTimer = setInterval(() => {
@@ -124,8 +234,55 @@ export class PeerNetwork {
     // Receivers dedupe via mempool.has(), so this is cheap and self-bounding.
     this.txRebroadcastTimer = setInterval(() => this.gossipMempool(), TX_REBROADCAST_MS);
 
-    // Send a first heartbeat right away to register ourselves.
+    // Send a first heartbeat right away to register ourselves on every API server.
     void this.heartbeat();
+  }
+
+  /**
+   * Construct one PeerJS client pointed at a single signaling server. Returns
+   * a promise that resolves when that client reaches `open` and rejects if it
+   * errors before opening. After `open`, errors are warnings only — the
+   * connection might recover, and other signaling servers are still alive.
+   */
+  private spawnPeer(signalingUrl: string): Promise<void> {
+    const url = new URL(signalingUrl);
+    const peer = new Peer(this.myId!, {
+      host: url.hostname,
+      port: Number(url.port) || (url.protocol === 'https:' ? 443 : 80),
+      path: '/peerjs',
+      secure: url.protocol === 'https:',
+      config: { iceServers: ICE_SERVERS },
+    });
+    this.peers.set(signalingUrl, peer);
+
+    return new Promise<void>((resolve, reject) => {
+      let opened = false;
+      peer.on('open', () => {
+        opened = true;
+        this.opened.add(signalingUrl);
+        this.markSignalingOpen(signalingUrl, true);
+        resolve();
+      });
+      peer.on('error', (err) => {
+        console.warn('[peer]', signalingUrl, 'error', err.type, err.message);
+        if (!opened) {
+          this.markSignalingOpen(signalingUrl, false);
+          reject(err);
+        }
+      });
+      peer.on('disconnected', () => {
+        this.opened.delete(signalingUrl);
+        this.markSignalingOpen(signalingUrl, false);
+        // PeerJS will auto-reconnect by default; we just reflect the gap.
+      });
+      peer.on('connection', (conn) => this.adoptConnection(conn));
+    });
+  }
+
+  private markSignalingOpen(url: string, open: boolean): void {
+    const entry = this.status.signalingServers.find((s) => s.url === url);
+    if (entry) entry.open = open;
+    this.emit();
   }
 
   stop(): void {
@@ -135,11 +292,33 @@ export class PeerNetwork {
     this.txRebroadcastTimer = null;
     for (const c of this.connections.values()) c.close();
     this.connections.clear();
-    this.peer?.destroy();
-    this.peer = null;
+    for (const peer of this.peers.values()) {
+      try { peer.destroy(); } catch { /* ignore */ }
+    }
+    this.peers.clear();
+    this.opened.clear();
+    this.myId = null;
     this.status.myId = null;
     this.status.connected = 0;
+    for (const s of this.status.signalingServers) s.open = false;
     this.emit();
+  }
+
+  /**
+   * Replace the signaling-server list. Tears down all current Peer instances
+   * and rebuilds. As a side effect, all current direct WebRTC connections
+   * close — they were owned by Peer instances that are being destroyed. The
+   * fresh setup will re-dial known peers as soon as the new Peers open.
+   */
+  async setSignalingServers(urls: string[]): Promise<void> {
+    this.signalingServers = urls;
+    this.status.signalingServers = urls.map((url) => ({ url, open: false }));
+    this.stop();
+    if (urls.length === 0) {
+      this.emit();
+      return;
+    }
+    await this.start();
   }
 
   broadcastBlock(): void {
@@ -175,31 +354,74 @@ export class PeerNetwork {
     }
   }
 
+  /**
+   * Pick any healthy Peer to use as the outbound-dial origin. PeerJS uses
+   * whichever Peer instance you called `.connect()` on as the signaling
+   * channel for that handshake.
+   */
+  private anyOpenPeer(): Peer | null {
+    for (const [url, peer] of this.peers) {
+      if (this.opened.has(url)) return peer;
+    }
+    return null;
+  }
+
   private async dialFromBootstrap(): Promise<void> {
-    try {
-      const r = await fetch(new URL('/peers', this.bootstrapUrl).toString());
-      const { peers } = (await r.json()) as { peers: string[] };
-      const candidates = peers.filter((id) => id !== this.status.myId && !this.connections.has(id));
-      // Shuffle and take up to MAX_PEERS connection slots.
-      for (let i = candidates.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
-      }
-      for (const id of candidates) {
-        if (this.connections.size >= MAX_PEERS) break;
-        const conn = this.peer!.connect(id, { reliable: true });
-        this.adoptConnection(conn);
-      }
-    } catch (e) {
-      console.warn('[peer] bootstrap dial failed', (e as Error).message);
+    // Three-source candidate gathering: the locally-known pool (gossip + IDB
+    // cache) first, then a unioned /peers list from every helper API server.
+    // If every helper is down the gossip path alone can still keep an
+    // established mesh discoverable.
+    const fresh: string[] = [];
+    for (const id of this.candidatePool) {
+      if (id === this.myId) continue;
+      if (this.connections.has(id)) continue;
+      if (this.dialedThisSession.has(id)) continue;
+      fresh.push(id);
+    }
+
+    const serverPeers = await this.serverSync.fetchPeers();
+    for (const id of serverPeers) {
+      if (id === this.myId) continue;
+      if (this.connections.has(id)) continue;
+      if (this.dialedThisSession.has(id)) continue;
+      if (!fresh.includes(id)) fresh.push(id);
+    }
+
+    if (fresh.length === 0) return;
+
+    // Shuffle so we don't hammer the same subset of IDs from every tab.
+    for (let i = fresh.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [fresh[i], fresh[j]] = [fresh[j]!, fresh[i]!];
+    }
+    const origin = this.anyOpenPeer();
+    if (!origin) return; // no signaling open right now; try again next heartbeat
+    for (const id of fresh) {
+      if (this.connections.size >= MAX_PEERS) break;
+      this.dialedThisSession.add(id);
+      const conn = origin.connect(id, { reliable: true });
+      this.adoptConnection(conn);
     }
   }
 
   private adoptConnection(conn: DataConnection): void {
     conn.on('open', () => {
+      // Dedup: a remote peer might reach us via two different signaling
+      // servers in quick succession. Keep the first; close the rest.
+      const existing = this.connections.get(conn.peer);
+      if (existing && existing !== conn) {
+        try { conn.close(); } catch { /* ignore */ }
+        return;
+      }
       this.connections.set(conn.peer, conn);
+      this.candidatePool.add(conn.peer);
       this.status.connected = this.connections.size;
       this.emit();
+      // Persist this peer so a future page-load can dial it directly without
+      // waiting on a helper server's /peers. Listener fires async.
+      for (const fn of this.peerSeenListeners) {
+        try { fn(conn.peer); } catch { /* listener shouldn't crash gossip */ }
+      }
       // Say hello with our chain tip so the peer can decide to sync.
       const tip = this.chain.tip;
       conn.send({
@@ -208,6 +430,9 @@ export class PeerNetwork {
         tipHash: bytesToHex(tip.hash),
         chainId: CHAIN_ID,
       } satisfies ProtoMsg);
+      // Ask for more peer IDs so we can broaden the mesh independently of any
+      // helper server.
+      conn.send({ t: 'getAddrs', max: 32 } satisfies ProtoMsg);
       // Flood the new peer with everything we've got in the mempool. Without
       // this, a peer joining 1s after a sender broadcasts never hears about
       // the pending tx and won't include it when it mines.
@@ -215,9 +440,13 @@ export class PeerNetwork {
     });
     conn.on('data', (data) => this.onIncoming(conn, data as ProtoMsg));
     conn.on('close', () => {
-      this.connections.delete(conn.peer);
-      this.status.connected = this.connections.size;
-      this.emit();
+      // Only remove if this exact DataConnection is the one we have stored
+      // (might already have been replaced by a dedup race).
+      if (this.connections.get(conn.peer) === conn) {
+        this.connections.delete(conn.peer);
+        this.status.connected = this.connections.size;
+        this.emit();
+      }
     });
     conn.on('error', (e) => {
       console.warn('[peer] conn error', conn.peer, e.message);
@@ -233,9 +462,19 @@ export class PeerNetwork {
             return;
           }
           if (msg.height > this.chain.height && !this.chain.hasBlock(msg.tipHash)) {
-            // Ask for their tip. If its parent is unknown we'll walk backwards
-            // via the orphan-pool fill below until we hit a shared ancestor.
-            conn.send({ t: 'getBlock', hash: msg.tipHash } satisfies ProtoMsg);
+            // If the peer is more than one block ahead, prefer a range pull —
+            // dramatically faster than walking back one parent at a time via
+            // the orphan pool. The single-block path stays as the fallback
+            // when the gap is small or when the range response is empty.
+            if (msg.height > this.chain.height + 1) {
+              conn.send({
+                t: 'getBlocks',
+                fromHeight: this.chain.height + 1,
+                max: 64,
+              } satisfies ProtoMsg);
+            } else {
+              conn.send({ t: 'getBlock', hash: msg.tipHash } satisfies ProtoMsg);
+            }
           }
           break;
 
@@ -268,6 +507,79 @@ export class PeerNetwork {
         case 'getBlock': {
           const target = this.chain.getBlock(msg.hash);
           if (target) conn.send(encodeBlockMsg(target.block));
+          break;
+        }
+
+        case 'getBlocks': {
+          // Range serve: walk canonical from fromHeight forward. Cap at the
+          // caller's max OR 64 (whichever's smaller) to bound message size.
+          const max = Math.max(1, Math.min(64, msg.max | 0));
+          const fromHeight = Math.max(0, msg.fromHeight | 0);
+          // iterateCanonical() walks newest-first; collect then reverse so the
+          // response is height-ascending (matches server /blocks behaviour).
+          const collected: Block[] = [];
+          for (const cb of this.chain.iterateCanonical()) {
+            if (cb.block.header.height < fromHeight) break;
+            collected.push(cb.block);
+            if (collected.length >= max + 32) break; // small over-fetch then trim
+          }
+          collected.reverse();
+          const slice = collected.slice(0, max);
+          if (slice.length > 0) {
+            conn.send({
+              t: 'blocks',
+              data: slice.map((b) => bytesToHex(encodeBlock(b))),
+            } satisfies ProtoMsg);
+          }
+          break;
+        }
+
+        case 'blocks': {
+          // Apply in order. handleIncomingBlock already does parent-gap orphan
+          // parking, so even if the first block in the batch has an unknown
+          // parent we'll backfill via getBlock on the originating peer.
+          void (async () => {
+            for (const hex of msg.data) {
+              let block: Block;
+              try { block = decodeBlock(hexToBytes(hex)); }
+              catch { continue; }
+              await this.handleIncomingBlock(block, conn);
+            }
+          })();
+          break;
+        }
+
+        case 'getAddrs': {
+          const max = Math.max(1, Math.min(64, msg.max | 0));
+          const peers: string[] = [];
+          for (const id of this.connections.keys()) {
+            if (id === conn.peer) continue; // don't bounce them back to themselves
+            peers.push(id);
+            if (peers.length >= max) break;
+          }
+          if (peers.length > 0) {
+            conn.send({ t: 'addrs', peers } satisfies ProtoMsg);
+          }
+          break;
+        }
+
+        case 'addrs': {
+          for (const id of msg.peers) {
+            if (typeof id !== 'string') continue;
+            if (id === this.myId) continue;
+            if (this.connections.has(id)) continue;
+            this.candidatePool.add(id);
+            // Persist newly-learned peers too, so a future page load can use
+            // them directly (helper /peers stops being the single source).
+            for (const fn of this.peerSeenListeners) {
+              try { fn(id); } catch { /* ignore */ }
+            }
+          }
+          // If we're below MIN_PEERS, kick a dial pass — we just got more
+          // candidates and shouldn't wait for the heartbeat tick.
+          if (this.connections.size < MIN_PEERS) {
+            void this.dialFromBootstrap();
+          }
           break;
         }
 
@@ -353,25 +665,36 @@ export class PeerNetwork {
     }
   }
 
+  /**
+   * Heartbeat — fans out to all helper API servers via ServerSync, then
+   * pulls aggregated stats back to surface network-wide peer/miner counts.
+   */
   private async heartbeat(): Promise<void> {
-    if (!this.status.myId) return;
-    try {
-      await fetch(new URL('/heartbeat', this.bootstrapUrl).toString(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: this.status.myId,
-          height: this.chain.height,
-          mining: this.isMining(),
-        }),
-      });
-      const r = await fetch(new URL('/stats', this.bootstrapUrl).toString());
-      const stats = (await r.json()) as { peerCount: number; minersActive?: number };
+    if (!this.myId) return;
+    const stats = await this.serverSync.heartbeat({
+      id: this.myId,
+      height: this.chain.height,
+      mining: this.isMining(),
+    });
+    if (stats) {
       this.status.serverPeerCount = stats.peerCount;
-      this.status.serverMinersActive = stats.minersActive ?? 0;
+      this.status.serverMinersActive = stats.minersActive;
       this.emit();
-    } catch {
-      // network blip — fine, retry next interval
     }
+  }
+}
+
+/**
+ * Resolve as soon as any one of the input promises fulfills. Reject only if
+ * every single one rejects. Equivalent to `Promise.any` semantics but
+ * preserves the rejection list for diagnostic purposes.
+ */
+async function firstSuccess<T>(promises: Promise<T>[], allFailedMsg: string): Promise<T> {
+  // Promise.any is ES2021 and available everywhere we care about, but its
+  // AggregateError isn't supported in some toolchains — wrap it just in case.
+  try {
+    return await Promise.any(promises);
+  } catch {
+    throw new Error(allFailedMsg);
   }
 }

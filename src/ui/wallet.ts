@@ -1,7 +1,7 @@
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { hexToBytes } from '../util/binary.js';
-import { TICKER } from '../brand.js';
+import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, filterActivity, renderActivityRows, type ActivityFilter } from './activity.js';
 import { cardHeader } from './info.js';
 import { renderPager } from './pager.js';
@@ -33,7 +33,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     <div class="grid grid-12">
       <section class="card hero col-7" data-mount="balance">
         <div data-slot="header"></div>
-        <div class="balance" data-w="balance">0 <span class="unit">${TICKER}</span></div>
+        <div class="balance" data-w="balance">0 <span class="unit">${UNIT_LONG}</span></div>
         <label>Your address (share this to receive coins)</label>
         <div class="row">
           <input data-w="address" readonly />
@@ -174,7 +174,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
   });
 
   function paintBalance(): void {
-    balanceEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${TICKER}</span>`;
+    balanceEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${UNIT_LONG}</span>`;
     addressEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
     renderAddressQr(qrEl, node.wallet.address);

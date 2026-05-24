@@ -18,6 +18,15 @@ export type ProtoMsg =
   | { t: 'getHeaders'; fromHeight: number; max: number }
   | { t: 'headers'; data: string[] /* hex of encodeHeader entries */ }
   | { t: 'getBlock'; hash: string }
+  // Range block sync — lets a fresh tab catch up from any peer without ever
+  // touching the bootstrap server. Mirrors the server's /blocks endpoint.
+  | { t: 'getBlocks'; fromHeight: number; max: number }
+  | { t: 'blocks'; data: string[] /* hex of encodeBlock entries, height-ascending */ }
+  // Peer-address gossip — turns "I know one peer" into "I can find the rest of
+  // the mesh." Without this, /peers on the bootstrap server is the only way to
+  // discover peer IDs.
+  | { t: 'getAddrs'; max: number }
+  | { t: 'addrs'; peers: string[] }
   | { t: 'invBlock'; hash: string; height: number }
   | { t: 'invTx'; hash: string };
 

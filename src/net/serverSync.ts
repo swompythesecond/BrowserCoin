@@ -3,36 +3,76 @@ import { decodeBlock, encodeBlock, hashHeader, type Block } from '../chain/block
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Mempool } from '../chain/mempool.js';
 import { decodeTx, encodeTx, txHash, type Transaction } from '../chain/transaction.js';
+import { VerifierPool, defaultVerifierPoolSize } from '../chain/verifierPool.js';
+import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, tryRead } from './apiFanout.js';
 
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
 /** Background safety re-sync when we're totally isolated from peers. */
 const ISOLATED_POLL_MS = 10_000;
+/**
+ * Always-on background poll, even when peered. This is the bridge that lets a
+ * NAT-stuck "server-only" miner's blocks reach the rest of the mesh — peered
+ * clients pick them up within this window instead of "whenever someone happens
+ * to mine next." ~½× block time; tiny server load (one /tip per minute, no
+ * batch fetch unless heights actually differ).
+ */
+const BRIDGE_POLL_MS = 90_000;
 
 export interface ServerSyncStatus {
-  reachable: boolean;
+  /**
+   * Count of API servers currently considered reachable (last contact
+   * succeeded, or first attempt hasn't been made). UI consumers should check
+   * `reachable > 0` to mean "at least one helper server is responsive."
+   */
+  reachable: number;
+  /** Total count of API servers configured. `reachable / total` is the health ratio. */
+  total: number;
+  /** Max height reported across reachable servers — what we sync up to. */
   serverHeight: number;
   lastSyncedAt: number;
 }
 
+export interface HeartbeatPayload {
+  id: string;
+  height: number;
+  mining: boolean;
+}
+
+export interface NetworkStats {
+  peerCount: number;
+  minersActive: number;
+}
+
 /**
- * Talks to the always-on bootstrap server. Used as backup storage + peer
- * discovery, NOT a constant gossip relay — that role belongs to P2P.
+ * Talks to N independently-operated helper servers. Reads try them in health
+ * order and take the first success; writes fan out to all in parallel for
+ * durability. Used as backup storage + peer-discovery, NOT a constant gossip
+ * relay — that role belongs to P2P.
  *
- * Server contact happens only on these events:
+ * Server contact happens on these events:
  *   • Startup       — one-shot bootstrap (fetch chain + mempool snapshot).
  *   • Local mine    — push our new block (via `kick()`).
  *   • Local send    — push the one tx we just submitted (via `pushTx()`).
  *   • Lost peers    — if peer count falls to 0, a 10-s safety poll resumes
  *                     so an isolated tab can still catch up. Cancels the
  *                     moment a P2P peer comes back.
+ *   • Bridge poll   — slow background sync (~90 s) so server-only miners'
+ *                     blocks propagate to peered clients.
  *
- * The server has no authority — every block it returns is validated by the
- * local chain like any peer-relayed block.
+ * No server has authority — every block returned is validated by the local
+ * chain like any peer-relayed block.
  */
 export class ServerSync {
+  /** Fast poll, only running while we have 0 P2P peers (isolated rescue). */
   private timer: ReturnType<typeof setInterval> | null = null;
-  private status: ServerSyncStatus = { reachable: false, serverHeight: 0, lastSyncedAt: 0 };
+  /**
+   * Slow poll, always running once bootstrapped. Bridges server-only miners
+   * (whose blocks reach the server but not peers via WebRTC) into the peered
+   * mesh. Independent of `timer` — both can be active when isolated.
+   */
+  private bridgeTimer: ReturnType<typeof setInterval> | null = null;
+  private status: ServerSyncStatus = { reachable: 0, total: 0, serverHeight: 0, lastSyncedAt: 0 };
   private statusListeners = new Set<(s: ServerSyncStatus) => void>();
   private inFlight = false;
   private peerCount = 0;
@@ -41,19 +81,41 @@ export class ServerSync {
   /** Hashes of txs we've already pushed to the server; prevents re-POST on every kick. */
   private pushedTxHashes = new Set<string>();
 
+  /** Lazily-created pool of PoW verifier workers. */
+  private verifier: VerifierPool | null = null;
+
   constructor(
     private chain: Blockchain,
     private mempool: Mempool,
-    private serverUrl: string,
+    private apiServers: string[],
     /** Called whenever sync caused our local chain to change. */
     private onUpdate: () => void,
-  ) {}
+  ) {
+    this.status.total = apiServers.length;
+  }
 
-  setServerUrl(url: string): void {
-    this.serverUrl = url;
+  private getVerifier(): VerifierPool {
+    if (!this.verifier) this.verifier = new VerifierPool(defaultVerifierPoolSize());
+    return this.verifier;
+  }
+
+  setApiServers(urls: string[]): void {
+    this.apiServers = urls;
+    this.status.total = urls.length;
+    this.status.reachable = Math.min(this.status.reachable, urls.length);
+    this.emit();
+  }
+
+  getApiServers(): string[] {
+    return [...this.apiServers];
   }
 
   getStatus(): ServerSyncStatus {
+    // Always pull from HEALTH so callers see the latest reachability without
+    // having to wait for the next emit(). Several code paths (pullFrom,
+    // pullMempool, heartbeat) mark health success but don't immediately
+    // refresh the cached status field — recomputing here keeps reads honest.
+    this.status.reachable = reachableCount(this.apiServers);
     return { ...this.status };
   }
 
@@ -67,21 +129,29 @@ export class ServerSync {
     for (const fn of this.statusListeners) fn(snap);
   }
 
+  private refreshHealth(): void {
+    this.status.reachable = reachableCount(this.apiServers);
+  }
+
   async start(): Promise<void> {
     if (this.bootstrapped) return;
     this.bootstrapped = true;
     // One-shot bootstrap: get the chain and mempool snapshot in a single
-    // round-trip. After this, the server is only contacted when we mine,
-    // when we send, or when we lose all P2P peers.
+    // round-trip. After this we run a low-frequency bridge poll (so server-
+    // only miners' blocks always reach the peered mesh) plus a fast
+    // isolation-rescue poll whenever peer count drops to 0.
     await this.syncOnce();
     await this.pullMempool();
+    this.startBridgePolling();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.bridgeTimer) clearInterval(this.bridgeTimer);
+    this.bridgeTimer = null;
     this.bootstrapped = false;
-    this.status.reachable = false;
+    this.status.reachable = 0;
     this.emit();
   }
 
@@ -108,31 +178,96 @@ export class ServerSync {
     this.timer = null;
   }
 
+  private startBridgePolling(): void {
+    if (this.bridgeTimer) return;
+    this.bridgeTimer = setInterval(() => void this.syncOnce(), BRIDGE_POLL_MS);
+  }
+
   /** Force a sync immediately — called after we mine a block locally. */
   kick(): void {
     void this.syncOnce();
   }
 
-  /** Push a single tx to the server right away (best-effort, one-shot). */
+  /** Push a single tx to every reachable API server right away (best-effort). */
   pushTx(tx: Transaction): void {
     const hashHex = bytesToHex(txHash(tx));
     if (this.pushedTxHashes.has(hashHex)) return;
-    void this.postTxs([tx]).then((ok) => {
-      if (ok) this.pushedTxHashes.add(hashHex);
+    void this.postTxs([tx]).then((acks) => {
+      if (acks > 0) this.pushedTxHashes.add(hashHex);
     });
+  }
+
+  /**
+   * Used by PeerNetwork's heartbeat: fan out our liveness/height/mining state
+   * to every API server, then aggregate /stats from all of them (taking the
+   * max of each metric — every server has its own vantage point on the same
+   * network, max approximates the union).
+   */
+  async heartbeat(payload: HeartbeatPayload): Promise<NetworkStats | null> {
+    if (this.apiServers.length === 0) return null;
+    await fanoutWrite(this.apiServers, '/heartbeat', JSON.stringify(payload));
+    // Read stats from each server, take max.
+    const all = await Promise.allSettled(
+      this.apiServers.map(async (base) => {
+        const r = await fetch(new URL('/stats', base).toString());
+        if (!r.ok) return null;
+        return (await r.json()) as { peerCount: number; minersActive?: number };
+      }),
+    );
+    let peerCount = 0;
+    let minersActive = 0;
+    let anyOk = false;
+    for (const r of all) {
+      if (r.status !== 'fulfilled' || !r.value) continue;
+      anyOk = true;
+      peerCount = Math.max(peerCount, r.value.peerCount);
+      minersActive = Math.max(minersActive, r.value.minersActive ?? 0);
+    }
+    this.refreshHealth();
+    this.emit();
+    return anyOk ? { peerCount, minersActive } : null;
+  }
+
+  /**
+   * Used by PeerNetwork's peer-discovery: union all servers' /peers lists so a
+   * peer registered on any one helper is discoverable to us. Dedupes.
+   */
+  async fetchPeers(): Promise<string[]> {
+    if (this.apiServers.length === 0) return [];
+    const all = await Promise.allSettled(
+      this.apiServers.map(async (base) => {
+        const r = await fetch(new URL('/peers', base).toString());
+        if (!r.ok) return [] as string[];
+        const body = (await r.json()) as { peers?: string[] };
+        return body.peers ?? [];
+      }),
+    );
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of all) {
+      if (r.status !== 'fulfilled') continue;
+      for (const id of r.value) {
+        if (typeof id !== 'string') continue;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    this.refreshHealth();
+    return out;
   }
 
   private async syncOnce(): Promise<void> {
     if (this.inFlight) return;
+    if (this.apiServers.length === 0) return;
     this.inFlight = true;
     try {
       const tip = await this.getServerTip();
+      this.refreshHealth();
       if (!tip) {
-        this.status.reachable = false;
         this.emit();
         return;
       }
-      this.status.reachable = true;
       this.status.serverHeight = tip.height;
       this.status.lastSyncedAt = Date.now();
 
@@ -144,12 +279,13 @@ export class ServerSync {
         if (grew) this.onUpdate();
       }
 
-      // Push anything we have beyond the server's tip.
+      // Push anything we have beyond the server's tip. tip.height is the *max*
+      // across all servers; any server below it gets caught up via the fan-out
+      // POST. Servers above it stay above (no-op for them).
       if (this.chain.height > tip.height) {
         await this.pushFrom(tip.height + 1);
       }
     } catch (e) {
-      this.status.reachable = false;
       console.warn('[serverSync] error:', (e as Error).message);
     } finally {
       this.inFlight = false;
@@ -157,30 +293,66 @@ export class ServerSync {
     }
   }
 
+  /**
+   * Query every server's /tip in parallel, return the max-height response.
+   * Different servers may briefly disagree on tip; we sync to "whoever is
+   * furthest ahead" which the local chain then validates normally.
+   */
   private async getServerTip(): Promise<{ height: number; tipHash: string } | null> {
-    try {
-      const r = await fetch(this.url('/tip'));
-      if (!r.ok) return null;
-      return (await r.json()) as { height: number; tipHash: string };
-    } catch {
-      return null;
+    const all = await Promise.allSettled(
+      this.apiServers.map(async (base) => {
+        try {
+          const r = await fetch(new URL('/tip', base).toString());
+          if (!r.ok) { noteFailure(base); return null; }
+          const v = (await r.json()) as { height: number; tipHash: string };
+          noteSuccess(base);
+          return v;
+        } catch {
+          noteFailure(base);
+          return null;
+        }
+      }),
+    );
+    let best: { height: number; tipHash: string } | null = null;
+    for (const r of all) {
+      if (r.status !== 'fulfilled' || !r.value) continue;
+      if (!best || r.value.height > best.height) best = r.value;
     }
+    return best;
   }
 
-  /** Pull canonical blocks from the server starting at fromHeight. */
+  /**
+   * Pull canonical blocks from whichever server returns them first (health-
+   * ordered). Argon2id PoW verification is fanned out to the verifier worker
+   * pool — main thread stays free, and the per-batch wall clock drops to
+   * ~N×cores faster.
+   */
   private async pullFrom(fromHeight: number): Promise<boolean> {
     let cursor = fromHeight;
     let anyAdded = false;
     while (true) {
-      const r = await fetch(this.url(`/blocks?fromHeight=${cursor}&max=${PULL_BATCH}`));
-      if (!r.ok) break;
-      const { blocks } = (await r.json()) as { blocks: string[] };
-      if (blocks.length === 0) break;
+      const body = await tryRead(
+        this.apiServers,
+        `/blocks?fromHeight=${cursor}&max=${PULL_BATCH}`,
+        (r) => r.json() as Promise<{ blocks: string[] }>,
+      );
+      if (!body || body.blocks.length === 0) break;
+
+      // Decode all blocks up front so the workers can chew through their PoW
+      // checks while we do nothing on the main thread.
+      const decoded: Block[] = [];
+      for (const hex of body.blocks) {
+        try { decoded.push(decodeBlock(hexToBytes(hex))); }
+        catch { /* drop malformed */ }
+      }
+      if (decoded.length === 0) break;
+
+      const powResults = await this.getVerifier().verifyAll(decoded);
 
       let appliedThisRound = 0;
-      for (const hex of blocks) {
-        const block = decodeBlock(hexToBytes(hex));
-        const err = await this.chain.addBlock(block);
+      for (let i = 0; i < decoded.length; i++) {
+        const block = decoded[i]!;
+        const err = await this.chain.addBlockWithPow(block, powResults[i]!);
         if (err === null) {
           appliedThisRound++;
           anyAdded = true;
@@ -194,12 +366,12 @@ export class ServerSync {
       }
       if (appliedThisRound === -1) continue;
       if (appliedThisRound === 0) break;
-      cursor += blocks.length;
+      cursor += body.blocks.length;
     }
     return anyAdded;
   }
 
-  /** Push canonical blocks starting at fromHeight (inclusive) to the server. */
+  /** Push canonical blocks starting at fromHeight (inclusive) to every server. */
   private async pushFrom(fromHeight: number): Promise<void> {
     // Walk canonical newest-first then reverse so we send genesis-first.
     const pending: Block[] = [];
@@ -210,29 +382,35 @@ export class ServerSync {
     pending.reverse();
 
     for (const block of pending.slice(0, PUSH_BATCH)) {
-      const r = await fetch(this.url('/block'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ block: bytesToHex(encodeBlock(block)) }),
-      });
-      if (!r.ok) return;
-      const result = (await r.json()) as { status: string; parentNeeded?: string };
-      if (result.status === 'orphan' && result.parentNeeded) {
-        // Server is way behind / on a different branch — find the parent and push it first.
-        const parentHashHex = result.parentNeeded;
-        const parentBlock = this.chain.getBlock(parentHashHex);
-        if (parentBlock && parentBlock.block.header.height > 0) {
-          await this.pushFrom(parentBlock.block.header.height);
-          // Then retry the original push.
-          await fetch(this.url('/block'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ block: bytesToHex(encodeBlock(block)) }),
-          });
+      const body = JSON.stringify({ block: bytesToHex(encodeBlock(block)) });
+      const results = await fanoutWriteWith(
+        this.apiServers,
+        '/block',
+        body,
+        (r) => r.json() as Promise<{ status: string; parentNeeded?: string }>,
+      );
+
+      // If *any* server says "orphan, parent needed," recursively push the
+      // parent then retry. Different servers may be at different heights so
+      // some accept while others need backfill — that's fine, we just need to
+      // catch the laggards up. We don't bail on rejections; other servers may
+      // have accepted.
+      for (const res of results) {
+        if (!res.ok || !res.value) continue;
+        if (res.value.status === 'orphan' && res.value.parentNeeded) {
+          const parentBlock = this.chain.getBlock(res.value.parentNeeded);
+          if (parentBlock && parentBlock.block.header.height > 0) {
+            await this.pushFrom(parentBlock.block.header.height);
+            // Retry just to that one server.
+            await fetch(new URL('/block', res.server).toString(), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body,
+            }).catch(() => {});
+          }
+        } else if (res.value.status === 'invalid') {
+          console.warn('[serverSync]', res.server, 'rejected block at height', block.header.height);
         }
-      } else if (result.status === 'invalid') {
-        console.warn('[serverSync] server rejected our block at height', block.header.height);
-        return;
       }
     }
 
@@ -247,42 +425,30 @@ export class ServerSync {
    * network. Not called on a timer — gossip is P2P's job after this.
    */
   private async pullMempool(): Promise<void> {
-    try {
-      const r = await fetch(this.url('/mempool'));
-      if (!r.ok) return;
-      const { txs } = (await r.json()) as { txs: string[] };
-      let added = false;
-      for (const hex of txs) {
-        let tx: Transaction;
-        try { tx = decodeTx(hexToBytes(hex)).tx; } catch { continue; }
-        const h = bytesToHex(txHash(tx));
-        if (this.mempool.has(h)) continue;
-        const err = this.mempool.add(tx, this.chain.tipState);
-        if (!err) added = true;
-        // Server already has it — no need to bounce it back.
-        this.pushedTxHashes.add(h);
-      }
-      if (added) this.onUpdate();
-    } catch {
-      // server unreachable — peers will fill the gap once they connect
+    const body = await tryRead(
+      this.apiServers,
+      '/mempool',
+      (r) => r.json() as Promise<{ txs: string[] }>,
+    );
+    if (!body) return;
+    let added = false;
+    for (const hex of body.txs) {
+      let tx: Transaction;
+      try { tx = decodeTx(hexToBytes(hex)).tx; } catch { continue; }
+      const h = bytesToHex(txHash(tx));
+      if (this.mempool.has(h)) continue;
+      const err = this.mempool.add(tx, this.chain.tipState);
+      if (!err) added = true;
+      // Server already has it — no need to bounce it back.
+      this.pushedTxHashes.add(h);
     }
+    if (added) this.onUpdate();
   }
 
-  private async postTxs(txs: Transaction[]): Promise<boolean> {
-    try {
-      const body = { txs: txs.map((tx) => bytesToHex(encodeTx(tx))) };
-      const r = await fetch(this.url('/txs'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      return r.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private url(path: string): string {
-    return new URL(path, this.serverUrl).toString();
+  /** Push a batch of txs to every server. Returns how many ACK'd. */
+  private async postTxs(txs: Transaction[]): Promise<number> {
+    if (this.apiServers.length === 0) return 0;
+    const body = JSON.stringify({ txs: txs.map((tx) => bytesToHex(encodeTx(tx))) });
+    return fanoutWrite(this.apiServers, '/txs', body);
   }
 }

@@ -1,13 +1,16 @@
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { hashHeader } from '../chain/block.js';
-import { bytesToHex } from '../util/binary.js';
-import { TICKER } from '../brand.js';
+import { bytesToHex, compactToTarget } from '../util/binary.js';
+import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
 import { cardHeader } from './info.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
+import { nextDifficulty } from '../chain/consensus.js';
+import { DIFFICULTY_WINDOW, MTP_WINDOW } from '../chain/genesis.js';
+import { isMiningOffline, openOfflineModal } from './miner.js';
 
 const PREVIEW_ROWS = 5;
 // Shared with the dedicated Mine view so the two stay in sync across reloads.
@@ -34,7 +37,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     <div class="grid grid-12">
       <section class="card hero col-7" data-mount="balance">
         <div data-slot="header"></div>
-        <div class="balance" data-w="balance">0 <span class="unit">${TICKER}</span></div>
+        <div class="balance" data-w="balance">0 <span class="unit">${UNIT_LONG}</span></div>
         <label>Your address (share this to receive coins)</label>
         <div class="row">
           <input data-w="address" readonly />
@@ -56,9 +59,15 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
             <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="hashrate">0 H/s</div>
             <div class="text-sm muted mt-sm" data-w="state">idle</div>
           </div>
+          <div style="flex:1">
+            <div class="label-caps">Difficulty</div>
+            <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="diff">— bits</div>
+            <div class="text-sm muted mt-sm" data-w="diffSub">target —</div>
+          </div>
           <button data-w="toggle">Start mining</button>
         </div>
         <div class="text-sm muted mt-md" data-w="eta">Press start to begin.</div>
+        <div class="conn-strip conn-strip-small" data-w="connStrip" hidden></div>
         <div class="mt-md">
           <label class="text-sm">CPU power: <span data-w="pct">100%</span></label>
           <input type="range" min="0" max="100" value="100" class="slider" data-w="slider" />
@@ -84,6 +93,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
         <dl class="kv">
           <dt>Status</dt><dd data-w="state" class="muted">connecting…</dd>
           <dt>Peers</dt><dd data-w="peers" class="mono">0</dd>
+          <dt>Miners</dt><dd data-w="miners" class="mono">0</dd>
           <dt>Height</dt><dd data-w="height" class="mono">—</dd>
           <dt>Server</dt><dd data-w="server" class="mono">—</dd>
         </dl>
@@ -188,10 +198,23 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const hashrateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="hashrate"]')!;
   const minerStateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="state"]')!;
   const minerEtaEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="eta"]')!;
+  const minerDiffEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="diff"]')!;
+  const minerDiffSubEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="diffSub"]')!;
   const toggleBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="toggle"]')!;
+  const connStripEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="connStrip"]')!;
   toggleBtn.addEventListener('click', () => {
     const s = node.miner.getStatus();
-    if (s.running) node.miner.stop(); else node.miner.start();
+    if (s.running) { node.miner.stop(); return; }
+    if (isMiningOffline(node)) {
+      openOfflineModal(node, {
+        description: "You're not connected to any peers and the bootstrap server is unreachable. " +
+          "If you mine now, your blocks won't reach anyone else until you reconnect.",
+        primary: { label: 'Mine anyway', onClick: () => node.miner.start() },
+        dismissLabel: 'Cancel',
+      });
+      return;
+    }
+    node.miner.start();
   });
 
   const cpuSlider = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="slider"]')!;
@@ -226,6 +249,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
 
   const netStateEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="state"]')!;
   const netPeersEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="peers"]')!;
+  const netMinersEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="miners"]')!;
   const netHeightEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="height"]')!;
   const netServerEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="server"]')!;
 
@@ -233,7 +257,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const memRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="mempool"] [data-w="memRows"]')!;
 
   function refresh(): void {
-    balEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${TICKER}</span>`;
+    balEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${UNIT_LONG}</span>`;
     addrEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
     renderAddressQr(qrEl, node.wallet.address);
@@ -245,18 +269,47 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
 
     const ps = node.network?.getStatus();
     const ss = node.serverSync?.getStatus();
-    if (ps?.myId) { netStateEl.textContent = 'online'; netStateEl.className = 'green'; }
-    else if (ss?.reachable) { netStateEl.textContent = 'server-only'; netStateEl.className = 'muted'; }
+    const apiUp = ss?.reachable ?? 0;
+    if (ps?.myId && (ps.connected > 0)) { netStateEl.textContent = 'online'; netStateEl.className = 'green'; }
+    else if (apiUp > 0) { netStateEl.textContent = 'server-only'; netStateEl.className = 'muted'; }
     else { netStateEl.textContent = 'offline'; netStateEl.className = 'red'; }
     netPeersEl.textContent = String(ps?.connected ?? 0);
+    netMinersEl.textContent = String(ps?.serverMinersActive ?? 0);
     netHeightEl.textContent = `${node.chain.height}`;
+
+    // Difficulty preview — what the next block would need to beat.
+    const nextHeight = node.chain.height + 1;
+    const lookback = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
+    const diff = nextDifficulty(nextHeight, lookback, Math.floor(Date.now() / 1000));
+    const target = compactToTarget(diff);
+    const bits = target <= 0n ? 256 : 256 - target.toString(2).length;
+    const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;
+    minerDiffEl.textContent = `${bits} bits`;
+    minerDiffSubEl.textContent = `~${formatBig(expected)} hashes/block`;
     if (ss) {
       const lag = node.chain.height - ss.serverHeight;
-      const tag = ss.reachable ? (lag === 0 ? 'in sync' : lag > 0 ? `pushing (+${lag})` : `pulling (${-lag})`) : 'unreachable';
-      netServerEl.textContent = `${tag} · ${ss.serverHeight}`;
-      netServerEl.className = ss.reachable ? 'green mono' : 'red mono';
+      const reachable = ss.reachable > 0;
+      const tag = reachable ? (lag === 0 ? 'in sync' : lag > 0 ? `pushing (+${lag})` : `pulling (${-lag})`) : 'unreachable';
+      netServerEl.textContent = `${tag} · ${ss.serverHeight} · ${ss.reachable}/${ss.total} up`;
+      netServerEl.className = reachable ? 'green mono' : 'red mono';
     } else {
       netServerEl.textContent = '—';
+    }
+
+    // Compact connectivity strip on the miner card — mirrors the full strip
+    // on /mine so users see the state without navigating.
+    const peers = ps?.connected ?? 0;
+    const serverOk = (ss?.reachable ?? 0) > 0;
+    connStripEl.hidden = false;
+    if (peers > 0) {
+      connStripEl.className = 'conn-strip conn-strip-small ok';
+      connStripEl.innerHTML = `<span class="dot"></span> ${peers} peer${peers === 1 ? '' : 's'} · direct gossip`;
+    } else if (serverOk) {
+      connStripEl.className = 'conn-strip conn-strip-small warn';
+      connStripEl.innerHTML = `<span class="dot"></span> Server-bridged · blocks reach the chain via the bootstrap server`;
+    } else {
+      connStripEl.className = 'conn-strip conn-strip-small bad';
+      connStripEl.innerHTML = `<span class="dot"></span> Offline · click Start to set up a direct peer link`;
     }
 
     // Recent blocks (5).
@@ -332,12 +385,29 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const unsubChain = node.onChain(refresh);
   const unsubWallet = node.onWallet(refresh);
   const unsubMiner = node.miner.onStatus(refreshMiner);
+  // Repaint when network connectivity changes too — otherwise a peer connect
+  // or first-server-reachable event right after this view mounts wouldn't
+  // update the connStrip until the 5s ticker, briefly showing "Offline".
+  // Subscribe lazily: serverSync/network are created during node.start(), so
+  // they may be null at mount time. We piggyback on onSync — once that fires
+  // they exist, and we wire up the network-level subscriptions.
+  let unsubServer: (() => void) | undefined;
+  let unsubPeer: (() => void) | undefined;
+  const wireWhenReady = (): void => {
+    if (!unsubServer && node.serverSync) unsubServer = node.serverSync.onStatus(refresh);
+    if (!unsubPeer && node.network) unsubPeer = node.network.onStatus(refresh);
+  };
+  wireWhenReady();
+  const unsubSync = node.onSync(() => { wireWhenReady(); refresh(); });
   const ticker = setInterval(refresh, 5000);
 
   return () => {
     unsubChain();
     unsubWallet();
     unsubMiner();
+    unsubServer?.();
+    unsubPeer?.();
+    unsubSync();
     clearInterval(ticker);
   };
 }
@@ -346,5 +416,14 @@ function formatHashrate(h: number): string {
   if (h < 1000) return `${h.toFixed(0)} H/s`;
   if (h < 1e6) return `${(h / 1e3).toFixed(2)} kH/s`;
   return `${(h / 1e6).toFixed(2)} MH/s`;
+}
+
+function formatBig(n: bigint): string {
+  const s = n.toString();
+  if (s.length <= 4) return s;
+  if (s.length <= 6) return `${(Number(n) / 1e3).toFixed(1)}k`;
+  if (s.length <= 9) return `${(Number(n) / 1e6).toFixed(2)}M`;
+  if (s.length <= 12) return `${(Number(n) / 1e9).toFixed(2)}G`;
+  return `${s[0]}.${s.slice(1, 3)}e${s.length - 1}`;
 }
 

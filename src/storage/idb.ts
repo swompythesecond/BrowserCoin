@@ -4,10 +4,19 @@
  */
 
 const DB_NAME = 'browsercoin';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const BLOCKS_STORE = 'blocks';   // key: hash hex, value: { encoded: Uint8Array, height: number }
 const META_STORE = 'meta';       // key: string, value: arbitrary
+const PEERS_STORE = 'peers';     // key: peer ID, value: StoredPeer (lastSeen, failures)
 const LEGACY_CHAT_STORE = 'chat';
+
+/**
+ * Drop peers we haven't seen in a week — peer IDs are random per-tab, so a
+ * stale entry is dead weight that adds noise to the dial pool.
+ */
+const PEER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Evict after this many consecutive dial failures. */
+const MAX_PEER_FAILURES = 3;
 
 let _db: IDBDatabase | null = null;
 
@@ -28,6 +37,11 @@ function open(): Promise<IDBDatabase> {
       // still have it on disk — delete so the upgrade is a one-shot cleanup.
       if (db.objectStoreNames.contains(LEGACY_CHAT_STORE)) {
         db.deleteObjectStore(LEGACY_CHAT_STORE);
+      }
+      // v4 adds the peer cache so a returning tab can dial known peers without
+      // depending on the bootstrap server's /peers list.
+      if (!db.objectStoreNames.contains(PEERS_STORE)) {
+        db.createObjectStore(PEERS_STORE, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => {
@@ -98,4 +112,61 @@ export async function clearAll(): Promise<void> {
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+}
+
+interface StoredPeer {
+  id: string;
+  lastSeen: number;   // ms epoch; entries older than PEER_TTL_MS are dropped on read
+  failures: number;   // consecutive failed dials; entry evicted past MAX_PEER_FAILURES
+}
+
+/** Mark a peer as successfully seen — call from `adoptConnection.open`. */
+export async function recordPeerSeen(id: string): Promise<void> {
+  const db = await open();
+  const tx = db.transaction(PEERS_STORE, 'readwrite');
+  const store = tx.objectStore(PEERS_STORE);
+  store.put({ id, lastSeen: Date.now(), failures: 0 } satisfies StoredPeer);
+  await new Promise<void>((res, rej) => {
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+/** Increment failure count for a peer; evict if it exceeds the threshold. */
+export async function recordPeerFailure(id: string): Promise<void> {
+  const db = await open();
+  const tx = db.transaction(PEERS_STORE, 'readwrite');
+  const store = tx.objectStore(PEERS_STORE);
+  const existing = await wrap(store.get(id)) as StoredPeer | undefined;
+  if (!existing) return;
+  const next = { ...existing, failures: existing.failures + 1 };
+  if (next.failures >= MAX_PEER_FAILURES) store.delete(id);
+  else store.put(next);
+  await new Promise<void>((res, rej) => {
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+/**
+ * Return cached peer IDs that aren't past TTL, newest-first. Stale entries
+ * (lastSeen > PEER_TTL_MS ago) are pruned in the same transaction.
+ */
+export async function listCachedPeers(): Promise<string[]> {
+  const db = await open();
+  const tx = db.transaction(PEERS_STORE, 'readwrite');
+  const store = tx.objectStore(PEERS_STORE);
+  const all = await wrap(store.getAll()) as StoredPeer[];
+  const cutoff = Date.now() - PEER_TTL_MS;
+  const fresh: StoredPeer[] = [];
+  for (const p of all) {
+    if (p.lastSeen < cutoff) store.delete(p.id);
+    else fresh.push(p);
+  }
+  await new Promise<void>((res, rej) => {
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+  fresh.sort((a, b) => b.lastSeen - a.lastSeen);
+  return fresh.map((p) => p.id);
 }

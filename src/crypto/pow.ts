@@ -5,19 +5,22 @@ import { argon2id } from 'hash-wasm';
  *
  * Block IDs / prevHash links still use sha256() (see crypto/hash.ts) — this
  * function is only called from the miner grind loop and from consensus
- * verification. 64 MB per-hash with 2 iterations puts the bottleneck on RAM
+ * verification. 32 MB per-hash with 1 iteration puts the bottleneck on RAM
  * bandwidth, which is the closest browser-friendly analogue to ASIC
- * resistance — server attackers can't cheaply scale memory bandwidth the way
- * they can scale cores.
+ * resistance. 32 MB is chosen to spill out of mid-range GPU L2 caches
+ * (RTX 4070-class and below) so GPU mining can't trivially run hundreds of
+ * lanes from cache — keeping browser CPUs competitive.
+ *
+ * Per-verify cost on a typical laptop: ~40–125 ms.
  */
 
 // Network-wide fixed salt. The version suffix gives a clean hard-fork path:
-// bump to "...v2" to invalidate the old chain.
-const SALT = new TextEncoder().encode('browsercoin-pow-v1');
+// bump to "...v3" to invalidate the old chain.
+const SALT = new TextEncoder().encode('browsercoin-pow-v2');
 
 export const POW_PARAMS = {
-  memorySize: 64 * 1024, // KiB → 64 MB
-  iterations: 2,
+  memorySize: 32 * 1024, // KiB → 32 MB
+  iterations: 1,
   parallelism: 1,
   hashLength: 32,
 } as const;

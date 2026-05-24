@@ -38,7 +38,7 @@ export function mountAbout(host: HTMLElement): () => void {
         require any. It can be completely anonymous. Find a block on your
         laptop, see it appear in the explorer with your address on it. Send
         coins to a friend by showing them a QR code on your phone.
-        <strong>There is no market where you can buy BROWSER with dollars.</strong>
+        <strong>There is no market where you can buy BRC with dollars.</strong>
         The only way to get coins is to mine them, or to have someone who
         already mined some send them to you. Nobody is selling you anything.<strong> This is not about making money this is about enjoying the technology.</strong>
       </p>
@@ -76,11 +76,13 @@ export function mountAbout(host: HTMLElement): () => void {
         <li>No central authority signs blocks. No multisig of insiders can override consensus. No "DAO" votes on the chain.</li>
         <li>No checkpoint server that can rewrite history.</li>
         <li>
-          The bootstrap server is a tiny helper that lets browsers find each
-          other and keeps an optional backup of the chain. It cannot sign
-          blocks, override consensus, or mint coins. If you don't trust the
-          default one, point your client at any other under Settings, or run
-          your own with <code>npm run server</code>.
+          The helper servers are tiny optional services — one brokers the
+          initial WebRTC handshake, another keeps a backup copy of the chain
+          and helps new browsers find peers. Neither can sign blocks, override
+          consensus, or mint coins. Run multiple of either; the client tries
+          them all and fans out writes. Don't trust the defaults? Add your own
+          under Settings, or run <code>npm run server:api</code> /
+          <code>npm run server:peerjs</code>.
         </li>
       </ul>
 
@@ -92,8 +94,8 @@ export function mountAbout(host: HTMLElement): () => void {
       <h3>The rules</h3>
 
       <ul>
-        <li>Total supply: <strong>21,000,000 BROWSER</strong>, ever.</li>
-        <li>Block reward: <strong>50 BROWSER</strong>, halving every 210,000 blocks (~1 year at target pace).</li>
+        <li>Total supply: <strong>21,000,000 BRC</strong>, ever.</li>
+        <li>Block reward: <strong>50 BRC</strong>, halving every 210,000 blocks (~1 year at target pace).</li>
         <li>Target block time: <strong>2.5 minutes</strong>.</li>
         <li>Proof-of-work: <strong>memory-hard Argon2id (64 MB, 2 iterations)</strong>. Mineable on a laptop or phone. Hostile to GPUs and server farms.</li>
         <li>Account-model ledger, Ed25519 signatures, 256 KB block cap, per-byte minimum fee.</li>
@@ -194,7 +196,7 @@ export function mountAbout(host: HTMLElement): () => void {
         BrowserCoin uses native <code>bigint</code> for every balance, amount,
         fee, and intermediate sum. The bug class is structurally impossible.
         Defense in depth on top of that: transactions explicitly reject any
-        amount or fee greater than <code>MAX_MONEY</code> (21M BROWSER).
+        amount or fee greater than <code>MAX_MONEY</code> (21M BRC).
       </p>
 
       <h4>Why no central authority and no checkpoint server</h4>
@@ -227,7 +229,7 @@ export function mountAbout(host: HTMLElement): () => void {
 
       <ol>
         <li>Open <strong>browsercoin.org</strong>. You'll get a wallet on first visit, stored in your browser. Back it up under Settings.</li>
-        <li>Click <strong>Mine</strong>. Your CPU starts grinding Argon2id hashes. When one lands below the current difficulty target, you've found a block and earned 50 BROWSER.</li>
+        <li>Click <strong>Mine</strong>. Your CPU starts grinding Argon2id hashes. When one lands below the current difficulty target, you've found a block and earned 50 BRC.</li>
         <li>Show someone the <strong>QR code</strong> next to your address. They can scan it to send you coins.</li>
         <li>Tell a friend.</li>
         <li>And most importantly, have fun. Crypto is a neat technology  time to honor it by taking part. Not by trying to make profit.</li>

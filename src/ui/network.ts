@@ -94,8 +94,9 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     const ss = node.serverSync?.getStatus();
 
     toggle.textContent = node.network ? 'Disconnect' : 'Reconnect';
-    if (ps?.myId) { stateEl.textContent = 'online'; stateEl.className = 'green'; }
-    else if (ss?.reachable) { stateEl.textContent = 'server-only'; stateEl.className = 'muted'; }
+    const apiUp = ss?.reachable ?? 0;
+    if (ps?.myId && (ps.connected > 0)) { stateEl.textContent = 'online'; stateEl.className = 'green'; }
+    else if (apiUp > 0) { stateEl.textContent = 'server-only'; stateEl.className = 'muted'; }
     else { stateEl.textContent = 'offline'; stateEl.className = 'red'; }
     idEl.textContent = ps?.myId ?? '—';
     connEl.textContent = String(ps?.connected ?? 0);
@@ -103,11 +104,14 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     mempoolEl.textContent = String(node.mempool.size());
     if (ss) {
       const lag = node.chain.height - ss.serverHeight;
-      const tag = ss.reachable
+      const reachable = ss.reachable > 0;
+      const tag = reachable
         ? lag === 0 ? 'in sync' : lag > 0 ? `pushing (+${lag})` : `pulling (${-lag})`
         : 'unreachable';
-      serverEl.textContent = `${tag} · height ${ss.serverHeight}`;
-      serverEl.className = ss.reachable ? 'green mono' : 'red mono';
+      const sigOpen = ps?.signalingServers.filter((s) => s.open).length ?? 0;
+      const sigTotal = ps?.signalingServers.length ?? 0;
+      serverEl.textContent = `${tag} · height ${ss.serverHeight} · ${ss.reachable}/${ss.total} API · ${sigOpen}/${sigTotal} signaling`;
+      serverEl.className = reachable ? 'green mono' : 'red mono';
     } else {
       serverEl.textContent = '—';
     }

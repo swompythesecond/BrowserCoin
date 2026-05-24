@@ -633,6 +633,44 @@ label {
 }
 .about-body strong { color: var(--text); }
 .about-body a { color: var(--accent); }
+.about-body pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+.about-body pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.about-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+  display: block;
+  overflow-x: auto;
+}
+.about-body th, .about-body td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.about-body th {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--surface-2);
+}
+.about-body tr:last-child td { border-bottom: none; }
 
 /* ============ Wallet QR ============ */
 
@@ -813,3 +851,208 @@ label {
   .view-header { gap: 6px; }
   .view-sub { font-size: 0.85rem; }
 }
+
+/* ============ Sync overlay ============ */
+.sync-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(13, 15, 23, 0.92);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 1;
+  transition: opacity 250ms ease;
+}
+.sync-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.sync-card {
+  background: var(--surface, #161a26);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 28px 32px;
+  max-width: 420px;
+  width: calc(100% - 32px);
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+.sync-logo {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  display: block;
+  animation: sync-pulse 1.6s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.08); opacity: 0.7; }
+}
+.sync-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 6px;
+  color: var(--text);
+}
+.sync-sub {
+  color: var(--muted);
+  font-size: 0.92rem;
+  margin: 0 0 18px;
+}
+.sync-bar {
+  height: 8px;
+  background: var(--accent-soft);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0 0 10px;
+}
+.sync-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  width: 0%;
+  transition: width 200ms ease;
+}
+.sync-meta {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+.sync-phase {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.sync-dismiss {
+  margin-top: 18px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.sync-dismiss:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* ============ Block-found toast ============ */
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  max-width: 360px;
+  min-width: 240px;
+  transform: translateY(20px);
+  opacity: 0;
+  transition: transform 220ms ease, opacity 220ms ease;
+  pointer-events: none;
+}
+.toast.toast-show {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.toast[hidden] { display: none; }
+.toast-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--text-2);
+}
+.toast-body { flex: 1; min-width: 0; }
+.toast-title {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.toast-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 2px;
+}
+@media (max-width: 520px) {
+  .toast {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    max-width: none;
+  }
+}
+
+/* ============ Connectivity strip (mine page) ============ */
+
+.conn-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  line-height: 1.4;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.conn-strip .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.conn-strip.ok    { background: var(--green-soft); border-color: var(--green); color: var(--text); }
+.conn-strip.ok    .dot { background: var(--green); }
+.conn-strip.warn  { background: var(--amber-soft); border-color: var(--amber); color: var(--text); }
+.conn-strip.warn  .dot { background: var(--amber); }
+.conn-strip.bad   { background: var(--red-soft); border-color: var(--red); color: var(--text); }
+.conn-strip.bad   .dot { background: var(--red); }
+.conn-strip b { color: var(--text); font-weight: 600; }
+
+/* Compact variant for the home-page miner card. */
+.conn-strip-small {
+  font-size: 0.8rem;
+  padding: 6px 10px;
+  margin-top: 10px;
+}
+
+/* ============ Generic modal (offline-mining handshake) ============ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 9, 14, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  backdrop-filter: blur(4px);
+}
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+  width: 100%;
+  max-width: 520px;
+  color: var(--text);
+}
+.modal h3 { font-size: 1.05rem; font-weight: 600; }
+.modal input[readonly] { font-family: var(--mono); font-size: 0.85rem; }

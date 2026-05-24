@@ -15,6 +15,8 @@ export interface MinerStatus {
   currentTxCount: number;
   throttle: number; // 0..1
   workerCount: number;
+  /** Last reason start() refused. Cleared on a successful start. */
+  blockedReason?: string;
 }
 
 type WorkerSolved = { type: 'solved'; nonce: number; hash: Uint8Array };
@@ -49,6 +51,13 @@ export class MinerController {
   private statusListeners = new Set<(s: MinerStatus) => void>();
   private currentTemplate: { block: Block } | null = null;
 
+  /**
+   * Optional gate: if set and returns a string, `start()` refuses with that
+   * reason. Used by Node to block mining while the chain is still syncing —
+   * mining on a stale tip just produces orphans.
+   */
+  private canStart: (() => string | null) | null = null;
+
   constructor(
     private chain: Blockchain,
     private mempool: Mempool,
@@ -56,6 +65,10 @@ export class MinerController {
     /** Called by the controller whenever we successfully mine a block. */
     private onBlockMined: (b: Block) => void,
   ) {}
+
+  setStartGate(fn: (() => string | null) | null): void {
+    this.canStart = fn;
+  }
 
   setMinerAddress(pk: PublicKey): void {
     this.minerAddress = pk;
@@ -81,6 +94,13 @@ export class MinerController {
 
   start(): void {
     if (this.status.running) return;
+    const reason = this.canStart?.();
+    if (reason) {
+      this.status.blockedReason = reason;
+      this.emit();
+      return;
+    }
+    this.status.blockedReason = undefined;
     this.status.running = true;
     this.spawnWorkers();
     this.restartTemplate();

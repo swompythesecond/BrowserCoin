@@ -11,6 +11,18 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="sync-overlay" data-sync-overlay>
+      <div class="sync-card">
+        <img class="sync-logo" src="/logo.png" alt="BrowserCoin" />
+        <h2 class="sync-title" data-sync-title>Syncing the chain</h2>
+        <p class="sync-sub" data-sync-sub>Verifying blocks. This only happens on fresh tabs — reloads are instant.</p>
+        <div class="sync-bar"><div class="sync-bar-fill" data-sync-bar></div></div>
+        <div class="sync-meta" data-sync-meta>local 0 / server —</div>
+        <div class="sync-phase" data-sync-phase>preparing</div>
+        <button class="sync-dismiss" data-sync-dismiss hidden>Continue offline</button>
+      </div>
+    </div>
+
     <header class="topbar">
       <div class="brand">
         <img class="brand-mark" src="/logo.png" alt="BrowserCoin logo" />
@@ -26,6 +38,7 @@
         <button class="nav-tab" data-route="/explorer">Explorer</button>
         <button class="nav-tab" data-route="/mempool">Mempool</button>
         <button class="nav-tab" data-route="/about">About</button>
+        <button class="nav-tab" data-route="/developers">Developers</button>
         <button class="nav-tab" data-route="/settings">Settings</button>
       </nav>
       <div class="netstats">
@@ -38,6 +51,14 @@
     </header>
 
     <main data-view-root></main>
+
+    <div class="toast" data-block-toast hidden role="status" aria-live="polite">
+      <div class="toast-icon">⛏</div>
+      <div class="toast-body">
+        <div class="toast-title" data-toast-title>Block found!</div>
+        <div class="toast-sub" data-toast-sub></div>
+      </div>
+    </div>
 
     <footer class="sitefoot">
       <span class="sitefoot-text">BrowserCoin · a cryptocurrency that lives in your browser</span>

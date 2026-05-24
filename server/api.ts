@@ -1,20 +1,27 @@
 /**
- * BrowserCoin bootstrap + always-on node.
+ * BrowserCoin HTTP API helper server.
  *
- * Two roles in one process:
- *   1. PeerJS WebRTC signaling for browser-to-browser data channels.
- *   2. A full chain node — keeps a Blockchain instance, validates every block
- *      it accepts, persists the canonical chain to disk. NOT an authority —
- *      it just gives the network a stable replica that survives "everyone
- *      closed their tab" moments. Browsers verify everything themselves.
+ * Role: chain backup + peer discovery + heartbeat. NO PeerJS signaling here
+ * — that's a separate service (`server/peerjs.ts`) so the two can fail
+ * independently.
  *
- *  HTTP endpoints:
- *    GET  /tip                       latest known height + tip hash
- *    GET  /blocks?fromHeight=N&max=M canonical blocks (oldest-first), up to max
- *    POST /block                     submit a block; server validates + persists
- *    GET  /stats                     informational (peer count etc.)
- *    GET  /peers                     active peer ids for browsers to dial
- *    POST /heartbeat                 browsers keep themselves in /peers; mining flag tracks active miners
+ * HTTP endpoints:
+ *   GET  /                          plain-text info page
+ *   GET  /tip                       latest known height + tip hash
+ *   GET  /blocks?fromHeight=N&max=M canonical blocks (oldest-first), up to max
+ *   POST /block                     submit a block; server validates + persists
+ *   GET  /stats                     informational (peer count etc.)
+ *   GET  /peers                     active peer ids for browsers to dial
+ *   POST /heartbeat                 browsers keep themselves in /peers; mining flag tracks active miners
+ *   GET  /mempool                   pending tx hex list
+ *   POST /txs                       submit pending transactions
+ *
+ * Disk layout: each port gets its own `chain-${PORT}.json` file so multiple
+ * local instances don't clobber each other. Existing deployments using the
+ * legacy `chain.json` should rename it to `chain-9000.json` on first run.
+ *
+ * NOT an authority — every block is validated by the local Blockchain like
+ * any peer-relayed block; browsers verify everything themselves anyway.
  */
 
 import express from 'express';
@@ -22,21 +29,24 @@ import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { ExpressPeerServer } from 'peer';
 import { Blockchain } from '../src/chain/blockchain.js';
 import { decodeBlock, encodeBlock, hashHeader, type Block } from '../src/chain/block.js';
 import { bytesToHex, hexToBytes } from '../src/util/binary.js';
 import { Mempool } from '../src/chain/mempool.js';
 import { decodeTx, encodeTx, type Transaction } from '../src/chain/transaction.js';
+import { parsePort } from './lib/cli.js';
 
-const PORT = Number(process.env.PORT ?? 9000);
+const PORT = parsePort(9000);
 const STALE_PEER_MS = 60_000;
-// A miner is "active" if they reported mining=true within this window. Set
-// to 3× the client heartbeat interval (30s) so a single missed heartbeat
-// doesn't make the count flicker.
+/**
+ * A miner is "active" if they reported mining=true within this window. Set
+ * to 3× the client heartbeat interval (30s) so a single missed heartbeat
+ * doesn't make the count flicker.
+ */
 const MINING_TTL_MS = 90_000;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CHAIN_FILE = path.join(__dirname, 'chain.json');
+const CHAIN_FILE = path.join(__dirname, `chain-${PORT}.json`);
 
 const chain = new Blockchain();
 const mempool = new Mempool();
@@ -60,7 +70,7 @@ async function loadChainFromDisk(): Promise<void> {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
       console.warn('[chain] load failed:', (e as Error).message);
     } else {
-      console.log('[chain] no chain.json yet — starting fresh from genesis');
+      console.log(`[chain] no ${path.basename(CHAIN_FILE)} yet — starting fresh from genesis`);
     }
   }
 }
@@ -137,14 +147,6 @@ async function drainOrphans(addedHashHex: string): Promise<void> {
   }
 }
 
-const app = express();
-const server = http.createServer(app);
-
-const peerServer = ExpressPeerServer(server, {
-  path: '/',
-  allow_discovery: true,
-});
-
 interface PeerState {
   id: string;
   lastSeen: number;
@@ -166,17 +168,12 @@ function activeMinerCount(now: number): number {
   return n;
 }
 
-peerServer.on('connection', (client: { getId(): string }) => {
-  const id = client.getId();
-  peers.set(id, { id, lastSeen: Date.now(), reportedHeight: 0, lastMiningAt: null });
-  console.log(`[peer] connect ${id} (total=${peers.size})`);
-});
-peerServer.on('disconnect', (client: { getId(): string }) => {
-  const id = client.getId();
-  peers.delete(id);
-  console.log(`[peer] disconnect ${id} (total=${peers.size})`);
-});
-
+/**
+ * Sweep stale peer entries. With signaling now in a separate process, this
+ * server has no direct WebSocket-disconnect signal — the only liveness
+ * evidence is the client's HTTP heartbeat (every 30s). After STALE_PEER_MS
+ * with no heartbeat the entry is dropped from /peers.
+ */
 setInterval(() => {
   const now = Date.now();
   for (const [id, s] of peers) {
@@ -184,7 +181,9 @@ setInterval(() => {
   }
 }, 10_000);
 
-app.use('/peerjs', peerServer);
+const app = express();
+const server = http.createServer(app);
+
 app.use(express.json({ limit: '2mb' }));
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -301,15 +300,16 @@ app.post('/block', async (req, res) => {
 app.get('/', (_req, res) => {
   res.type('text/plain').send(
     [
-      'BrowserCoin bootstrap + chain server',
+      'BrowserCoin API helper server',
       `chain height: ${chain.height}  tip: ${bytesToHex(chain.tip.hash).slice(0, 16)}…`,
-      `peers connected: ${peers.size}`,
+      `peers known: ${peers.size}`,
+      '',
+      'This is the HTTP API helper only — WebRTC signaling is a separate service.',
       '',
       'endpoints:',
-      '  /peerjs/*    — PeerJS WebRTC signaling',
       '  /stats       — JSON network + chain stats',
       '  /peers       — JSON list of active peer ids',
-      '  /heartbeat   — POST { id, height } from browser nodes',
+      '  /heartbeat   — POST { id, height, mining }  browser keepalive',
       '  /tip         — JSON { height, tipHash }',
       '  /blocks      — GET ?fromHeight=N&max=M  canonical blocks',
       '  /block       — POST { block: <hex> }    submit a block',
@@ -322,10 +322,10 @@ app.get('/', (_req, res) => {
 async function main(): Promise<void> {
   await loadChainFromDisk();
   server.listen(PORT, () => {
-    console.log(`BrowserCoin server listening on :${PORT}`);
-    console.log(`  PeerJS signaling: ws://localhost:${PORT}/peerjs`);
-    console.log(`  Stats:            http://localhost:${PORT}/stats`);
-    console.log(`  Chain tip:        height=${chain.height}`);
+    console.log(`BrowserCoin API helper listening on :${PORT}`);
+    console.log(`  Chain file:  ${path.basename(CHAIN_FILE)}`);
+    console.log(`  Chain tip:   height=${chain.height}`);
+    console.log(`  Stats:       http://localhost:${PORT}/stats`);
   });
 }
 

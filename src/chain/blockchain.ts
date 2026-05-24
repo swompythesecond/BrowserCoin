@@ -49,6 +49,8 @@ export class Blockchain {
   private blocks = new Map<string, ChainBlock>();
   /** The chain tip — the block with the highest cumulative work. */
   private tipHash: string;
+  /** Listeners invoked after a block is accepted (any branch). Hash-hex passed for keying. */
+  private acceptListeners = new Set<(cb: ChainBlock) => void>();
 
   constructor() {
     const genHash = hashHeader(GENESIS.header);
@@ -60,6 +62,12 @@ export class Blockchain {
       state: emptyState(),
     });
     this.tipHash = genHashHex;
+  }
+
+  /** Subscribe to every accepted block (canonical or fork). Returns an unsubscribe fn. */
+  onBlockAdded(fn: (cb: ChainBlock) => void): () => void {
+    this.acceptListeners.add(fn);
+    return () => this.acceptListeners.delete(fn);
   }
 
   get tip(): ChainBlock {
@@ -111,6 +119,28 @@ export class Blockchain {
    * other branches.
    */
   async addBlock(block: Block): Promise<ValidationError | null> {
+    return this.addBlockInternal(block, { skipPoW: false, skipTxSig: false });
+  }
+
+  /**
+   * Restore a block that was previously validated and persisted locally (IDB).
+   * Skips Argon2id PoW + tx signature re-checks — those were verified when the
+   * block was first accepted, and re-running them would burn ~40–125 ms each.
+   * Still performs all state-dependent checks (parent link, difficulty,
+   * timestamp, roots, state apply) because they're cheap and catch IDB
+   * corruption / version-skew bugs.
+   *
+   * An attacker who can rewrite IndexedDB could also rewrite the running JS,
+   * so re-verifying PoW from IDB buys no real security — just latency.
+   */
+  async addValidatedBlock(block: Block): Promise<ValidationError | null> {
+    return this.addBlockInternal(block, { skipPoW: true, skipTxSig: true });
+  }
+
+  private async addBlockInternal(
+    block: Block,
+    opts: { skipPoW: boolean; skipTxSig: boolean },
+  ): Promise<ValidationError | null> {
     const { header, transactions } = block;
     const hash = hashHeader(header);
     const hashHex = bytesToHex(hash);
@@ -140,7 +170,7 @@ export class Blockchain {
     if (mtp > 0 && header.timestamp <= mtp) return 'timestamp not above median-time-past';
 
     // PoW.
-    if (!(await checkPoW(header))) return 'PoW invalid';
+    if (!opts.skipPoW && !(await checkPoW(header))) return 'PoW invalid';
 
     // txRoot must match the supplied tx list.
     const expectedTxRoot = computeTxRoot(transactions);
@@ -148,9 +178,11 @@ export class Blockchain {
 
     // Apply all txs against parent state into a clone, verify final stateRoot.
     const newState = cloneState(parent.state);
-    for (const tx of transactions) {
-      const sErr = validateTxStructure(tx);
-      if (sErr) return `tx structure: ${sErr}`;
+    if (!opts.skipTxSig) {
+      for (const tx of transactions) {
+        const sErr = validateTxStructure(tx);
+        if (sErr) return `tx structure: ${sErr}`;
+      }
     }
     const applyErr = applyBlockTxs(newState, header.height, header.miner, transactions);
     if (applyErr) return `apply: ${applyErr}`;
@@ -159,12 +191,25 @@ export class Blockchain {
 
     // All good. Cache the block and update tip if this branch is now heaviest.
     const work = parent.work + blockWork(header.difficulty);
-    this.blocks.set(hashHex, { block, hash, work, state: newState });
+    const accepted: ChainBlock = { block, hash, work, state: newState };
+    this.blocks.set(hashHex, accepted);
 
     if (work > this.tip.work) {
       this.tipHash = hashHex;
     }
+    for (const fn of this.acceptListeners) fn(accepted);
     return null;
+  }
+
+  /**
+   * Variant of addBlock that lets the caller supply a pre-computed PoW result.
+   * Used by the parallel verifier worker pool: the worker runs Argon2id in
+   * parallel and the main thread feeds the verdict in here. State-dependent
+   * checks still run sequentially.
+   */
+  async addBlockWithPow(block: Block, powValid: boolean): Promise<ValidationError | null> {
+    if (!powValid) return 'PoW invalid';
+    return this.addBlockInternal(block, { skipPoW: true, skipTxSig: false });
   }
 
   /** Number of stored blocks across all branches. Helpful for debugging/UI. */

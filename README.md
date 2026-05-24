@@ -21,10 +21,10 @@ The chain rules are deliberately Bitcoin-shaped (fixed max supply, halving rewar
 |---|---|---|
 | Target block time | **2.5 min** (150 s) | 10 min |
 | Difficulty retarget | **every block** over a 50-block window, MTP-derived, asymmetric clamp (≤2× up, ≤4× down per block) + emergency drop | every 2 016 blocks |
-| Initial block reward | **50 BROWSER** | 50 BTC |
+| Initial block reward | **50 BRC** | 50 BTC |
 | Halving interval | every **210 000 blocks** (~1 yr) | 210 000 blocks (~4 yr) |
-| Max supply | **21 000 000 BROWSER** | 21 000 000 BTC |
-| Smallest unit | 10⁻⁸ BROWSER | 10⁻⁸ BTC |
+| Max supply | **21 000 000 BRC** | 21 000 000 BTC |
+| Smallest unit | 10⁻⁸ BRC | 10⁻⁸ BTC |
 
 Per-block retargeting over a 50-block sliding window is what lets the chain self-calibrate to the very volatile aggregate hashrate of "however many browser tabs are open right now." The retarget uses median-time-past on both ends of the window (kills single-timestamp lies), an asymmetric step cap (≤2× harder, ≤4× easier per block — so attackers can't pin difficulty high after they leave), and an emergency-drop rule that halves difficulty if a block goes >6× target without being found (so the chain can't stall when a large miner suddenly disappears).
 
@@ -42,7 +42,7 @@ Per-block retargeting over a 50-block sliding window is what lets the chain self
 - **Account model** (Ethereum-style: `{balance, nonce}` per address) — smaller state than UTXO, browser-friendly.
 - **Ed25519** signatures (`@noble/ed25519`) — fast, deterministic, audited.
 - **Argon2id PoW** (64 MB, 2 iterations, memory-hard) mined in a Web Worker so the UI stays smooth. RAM-bandwidth bottleneck — closest browser-friendly analogue to ASIC resistance.
-- **PeerJS / WebRTC** peer-to-peer with a self-hosted signaling server (`server/index.ts`).
+- **PeerJS / WebRTC** peer-to-peer. Helper services are split: `server/api.ts` (chain backup + peer discovery) and `server/peerjs.ts` (signaling) run as independent processes so they can fail independently. Both lists are configurable in-app; anyone can run their own and add it.
 - **IndexedDB** for chain state, **localStorage** for the wallet keypair.
 - **Vanilla TypeScript + Vite** — no React, no framework runtime. Tiny bundle, hash-routed SPA shell.
 
@@ -52,14 +52,19 @@ Per-block retargeting over a 50-block sliding window is what lets the chain self
 # install once
 npm install
 
-# terminal 1 — bootstrap server (peer signaling + /stats + /heartbeat)
-npm run server         # → http://localhost:9000
+# terminal 1 — HTTP API helper (chain backup, /peers, /heartbeat, /tip, …)
+npm run server:api     # → http://localhost:9000
 
-# terminal 2 — the browser app
+# terminal 2 — WebRTC signaling helper
+npm run server:peerjs  # → http://localhost:9001
+
+# terminal 3 — the browser app
 npm run dev            # → http://localhost:5173
 ```
 
-Open the URL. You'll get an auto-generated wallet, hit **Start mining** on the Mine tab, and watch blocks appear. Open the same URL in a second browser (or incognito) and they'll discover each other via the bootstrap server and start gossiping blocks.
+Open the URL. You'll get an auto-generated wallet, hit **Start mining** on the Mine tab, and watch blocks appear. Open the same URL in a second browser (or incognito) and they'll discover each other via the helper servers and start gossiping blocks.
+
+The two helpers run as independent processes — kill one and the other keeps working. Either is optional: once two browsers have formed a direct WebRTC connection they keep gossiping even if both helpers die.
 
 ## Scripts
 
@@ -69,7 +74,8 @@ Open the URL. You'll get an auto-generated wallet, hit **Start mining** on the M
 | `npm run build` | Production build (typecheck + bundle) |
 | `npm run preview` | Serve the production build |
 | `npm test` | Run vitest unit tests |
-| `npm run server` | Bootstrap server (PeerJS + `/stats` + `/heartbeat`) |
+| `npm run server:api` | HTTP API helper (chain backup, `/peers`, `/heartbeat`, `/tip`, …) |
+| `npm run server:peerjs` | WebRTC signaling helper (`/peerjs` WebSocket) |
 
 ## Project layout
 
@@ -82,10 +88,13 @@ src/
   chain/          block, tx, state, mempool, blockchain, consensus, genesis
   storage/        IndexedDB + localStorage wallet + migration
   miner/          Web Worker nonce grinder + throttle slider
-  net/            PeerJS gossip protocol + server sync
+  net/            PeerJS gossip protocol + multi-server fan-out + sync
   ui/             vanilla-TS UI views + hash router + info-popovers
   util/           binary / merkle helpers
-server/           bootstrap signaling + stats endpoint
+server/
+  api.ts          HTTP API helper (chain backup, /peers, /heartbeat, /tip, …)
+  peerjs.ts       WebRTC signaling helper (PeerJS WebSocket)
+  lib/cli.ts      shared --port parser
 public/           static assets (logo, styles.css)
 ```
 
@@ -121,11 +130,18 @@ itself. There is no fiat market, no exchange listing, no economic skin in the ga
 sophisticated attackers; this is an experiment in seeing how far truly decentralized
 browser-native consensus can go.
 
+## For developers
+
+Build wallets, block explorers, or bots against any BrowserCoin helper server. The HTTP API is fully open (CORS `*`, no auth) and the wire format is documented end-to-end.
+
+- 📘 **[`docs/developers.md`](docs/developers.md)** — REST endpoints, block/tx binary format, PoW parameters, signing rules, P2P protocol.
+- 🛠️ **[`examples/send-tx.mjs`](examples/send-tx.mjs)** — runnable Node script that generates a key, signs a transaction, and submits it.
+
 ## Caveats
 
 - **This is an experiment, not a financial instrument.** Don't put real value on the chain.
-- BROWSER has no fiat market. The 21M-supply cap exists because the rules are Bitcoin-shaped, not because the token is scarce in any meaningful economic sense.
-- **Bootstrap server is pluggable.** The PeerJS signaling server is used only for *peer discovery* — the chain itself is fully decentralized. If the default server goes down or you don't trust it, change the URL under **Settings → Bootstrap server** and you're back online. Anyone can run `npm run server` and host their own.
+- BRC has no fiat market. The 21M-supply cap exists because the rules are Bitcoin-shaped, not because the token is scarce in any meaningful economic sense.
+- **Helper servers are pluggable and plural.** Both the HTTP API and PeerJS signaling are independent services, each with its own URL list under **Settings → Helper servers**. Reads try every server in health order; writes fan out to all of them. As long as one of either kind is reachable, new browsers can join. Anyone can run their own with `npm run server:api` and/or `npm run server:peerjs` and add the URL to the list.
 
 ## License
 

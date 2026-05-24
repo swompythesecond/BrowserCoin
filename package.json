@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "server": "tsx server/index.ts"
+    "server:api": "tsx server/api.ts --port 9000",
+    "server:peerjs": "tsx server/peerjs.ts --port 9001"
   },
   "dependencies": {
     "@noble/ed25519": "^2.1.0",

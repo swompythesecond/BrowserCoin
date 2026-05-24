@@ -3,10 +3,10 @@ import type { Block } from './block.js';
 /** Network identity baked into tx signatures to prevent cross-chain replay. */
 export const CHAIN_ID = 0xc01dfeed;
 
-/** Smallest unit: 1 BROWSER = 1e8 wei. */
+/** Smallest unit: 1 BRC = 1e8 wei. */
 export const COIN = 100_000_000n;
 
-/** Initial block reward (50 BROWSER), halved every HALVING_INTERVAL blocks. */
+/** Initial block reward (50 BRC), halved every HALVING_INTERVAL blocks. */
 export const INITIAL_REWARD = 50n * COIN;
 export const HALVING_INTERVAL = 210_000;
 

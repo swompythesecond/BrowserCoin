@@ -16,7 +16,7 @@ import {
  * True if the header's PoW hash is below its claimed target.
  *
  * Uses memory-hard Argon2id (not the block-ID sha256). One verify costs
- * ~80–250 ms on a laptop — acceptable since blocks arrive every ~150 s.
+ * ~40–125 ms on a laptop — acceptable since blocks arrive every ~150 s.
  */
 export async function checkPoW(header: BlockHeader): Promise<boolean> {
   const target = compactToTarget(header.difficulty);
