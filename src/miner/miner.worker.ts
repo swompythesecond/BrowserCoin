@@ -109,6 +109,7 @@ async function grind(msg: StartMsg, myGen: number): Promise<void> {
       (self as DedicatedWorkerGlobalScope).postMessage({
         type: 'hashrate',
         hashesPerSecond: (hashes * 1000) / (now - report),
+        deltaHashes: hashes,
       });
       hashes = 0;
       report = now;

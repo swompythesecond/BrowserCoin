@@ -15,12 +15,26 @@ export interface MinerStatus {
   currentTxCount: number;
   throttle: number; // 0..1
   workerCount: number;
+  /** Per-worker last-reported H/s. Length matches `workerCount`. */
+  workerHashrates: number[];
+  /** `performance.now()` of each worker's last hashrate report. A worker
+   *  whose entry is older than ~10s without an explanation is probably
+   *  stalled. */
+  workerLastReportAt: number[];
+  /** Hashes computed since `start()` (sum of `deltaHashes` from workers). */
+  totalHashes: number;
+  /** `performance.now()` when the current template started grinding. Null
+   *  while idle. */
+  attemptStartedAt: number | null;
+  /** Number of `restartTemplate()` calls since `start()` — surfaces tip
+   *  thrashing in the UI. */
+  attemptCount: number;
   /** Last reason start() refused. Cleared on a successful start. */
   blockedReason?: string;
 }
 
 type WorkerSolved = { type: 'solved'; nonce: number; hash: Uint8Array };
-type WorkerHashrate = { type: 'hashrate'; hashesPerSecond: number };
+type WorkerHashrate = { type: 'hashrate'; hashesPerSecond: number; deltaHashes: number };
 type WorkerExhausted = { type: 'exhausted' };
 type WorkerOut = WorkerSolved | WorkerHashrate | WorkerExhausted;
 
@@ -40,6 +54,7 @@ export function maxMinerWorkers(): number {
 export class MinerController {
   private workers: Worker[] = [];
   private workerHashrates: number[] = [];
+  private workerLastReportAt: number[] = [];
   private status: MinerStatus = {
     running: false,
     hashesPerSecond: 0,
@@ -47,6 +62,11 @@ export class MinerController {
     currentTxCount: 0,
     throttle: 1,
     workerCount: 1,
+    workerHashrates: [],
+    workerLastReportAt: [],
+    totalHashes: 0,
+    attemptStartedAt: null,
+    attemptCount: 0,
   };
   private statusListeners = new Set<(s: MinerStatus) => void>();
   private currentTemplate: { block: Block } | null = null;
@@ -102,6 +122,9 @@ export class MinerController {
     }
     this.status.blockedReason = undefined;
     this.status.running = true;
+    this.status.totalHashes = 0;
+    this.status.attemptCount = 0;
+    this.status.attemptStartedAt = null;
     this.spawnWorkers();
     this.restartTemplate();
     this.emit();
@@ -111,6 +134,9 @@ export class MinerController {
     this.status.running = false;
     this.terminateWorkers();
     this.status.hashesPerSecond = 0;
+    this.status.attemptStartedAt = null;
+    this.status.workerHashrates = [];
+    this.status.workerLastReportAt = [];
     this.emit();
   }
 
@@ -135,6 +161,7 @@ export class MinerController {
 
   private spawnWorkers(): void {
     this.terminateWorkers();
+    const now = performance.now();
     for (let i = 0; i < this.status.workerCount; i++) {
       const idx = i;
       const w = new Worker(
@@ -145,6 +172,9 @@ export class MinerController {
       this.workers.push(w);
     }
     this.workerHashrates = new Array(this.workers.length).fill(0);
+    this.workerLastReportAt = new Array(this.workers.length).fill(now);
+    this.status.workerHashrates = this.workerHashrates.slice();
+    this.status.workerLastReportAt = this.workerLastReportAt.slice();
   }
 
   private terminateWorkers(): void {
@@ -154,14 +184,19 @@ export class MinerController {
     }
     this.workers = [];
     this.workerHashrates = [];
+    this.workerLastReportAt = [];
   }
 
   private onWorker(idx: number, msg: WorkerOut): void {
     if (msg.type === 'hashrate') {
       if (idx < this.workerHashrates.length) {
         this.workerHashrates[idx] = msg.hashesPerSecond;
+        this.workerLastReportAt[idx] = performance.now();
         this.status.hashesPerSecond =
           this.workerHashrates.reduce((a, b) => a + b, 0);
+        this.status.totalHashes += msg.deltaHashes;
+        this.status.workerHashrates = this.workerHashrates.slice();
+        this.status.workerLastReportAt = this.workerLastReportAt.slice();
         this.emit();
       }
       return;
@@ -229,6 +264,8 @@ export class MinerController {
     this.currentTemplate = { block: { header, transactions: txs } };
     this.status.currentHeight = height;
     this.status.currentTxCount = txs.length;
+    this.status.attemptStartedAt = performance.now();
+    this.status.attemptCount++;
     this.emit();
 
     const target = compactToTarget(difficulty);

@@ -97,6 +97,38 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
         </p>
       </section>
     </div>
+
+    <section class="card mt-lg" data-mount="diag">
+      <div data-slot="header"></div>
+      <div data-w="diagIdle" class="text-sm muted">Start mining to see live diagnostics.</div>
+      <div data-w="diagBody" hidden>
+        <div class="conn-strip" data-w="diagBanner" hidden style="margin-bottom:12px;"></div>
+        <div class="label-caps" style="margin-bottom:6px;">Workers</div>
+        <div data-w="diagWorkers" style="display:grid; gap:4px; margin-bottom:14px;"></div>
+        <div class="grid grid-2">
+          <div class="stat-tile">
+            <div class="stat-label">Elapsed (this attempt)</div>
+            <div class="stat-value mono" data-w="diagElapsed">—</div>
+            <div class="stat-sub" data-w="diagAttempts">attempt #—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Hashes (this attempt)</div>
+            <div class="stat-value mono" data-w="diagAttemptHashes">—</div>
+            <div class="stat-sub" data-w="diagAttemptHashesSub">expected ~—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">P(found by now)</div>
+            <div class="stat-value mono" data-w="diagPFound">—</div>
+            <div class="stat-sub" data-w="diagPFoundSub">below 95% is still bad-luck range</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Avg / live hashrate</div>
+            <div class="stat-value mono" data-w="diagAvgRate">—</div>
+            <div class="stat-sub" data-w="diagAvgRateSub">total — hashes this session</div>
+          </div>
+        </div>
+      </div>
+    </section>
   `;
   host.appendChild(view);
 
@@ -112,6 +144,13 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     info: {
       title: 'Proof of work',
       body: `BrowserCoin uses a memory-hard hash function. The "difficulty" sets how many leading zero bits a valid block hash needs. As more miners join, the network automatically raises the difficulty to keep blocks arriving at the target rate.`,
+    },
+  }));
+  view.querySelector<HTMLElement>('[data-mount="diag"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Mining diagnostics',
+    info: {
+      title: 'Mining diagnostics',
+      body: `Per-worker hashrate, time on the current attempt, and the probability you should have found a block by now.\n\nPoW inter-arrival is exponential — the standard deviation equals the mean. A block taking 3-4× the mean is unusual but not anomalous; below 95% probability you're still in normal-luck territory. If a worker stops reporting for >10s, or the session-average hashrate falls well under the live number, something is likely wrong.`,
     },
   }));
 
@@ -136,6 +175,25 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const pctEl = view.querySelector<HTMLElement>('[data-w="pct"]')!;
   const threadSlider = view.querySelector<HTMLInputElement>('[data-w="threadSlider"]')!;
   const threadsEl = view.querySelector<HTMLElement>('[data-w="threads"]')!;
+
+  const diagIdle = view.querySelector<HTMLElement>('[data-w="diagIdle"]')!;
+  const diagBody = view.querySelector<HTMLElement>('[data-w="diagBody"]')!;
+  const diagBanner = view.querySelector<HTMLElement>('[data-w="diagBanner"]')!;
+  const diagWorkers = view.querySelector<HTMLElement>('[data-w="diagWorkers"]')!;
+  const diagElapsed = view.querySelector<HTMLElement>('[data-w="diagElapsed"]')!;
+  const diagAttempts = view.querySelector<HTMLElement>('[data-w="diagAttempts"]')!;
+  const diagAttemptHashes = view.querySelector<HTMLElement>('[data-w="diagAttemptHashes"]')!;
+  const diagAttemptHashesSub = view.querySelector<HTMLElement>('[data-w="diagAttemptHashesSub"]')!;
+  const diagPFound = view.querySelector<HTMLElement>('[data-w="diagPFound"]')!;
+  const diagPFoundSub = view.querySelector<HTMLElement>('[data-w="diagPFoundSub"]')!;
+  const diagAvgRate = view.querySelector<HTMLElement>('[data-w="diagAvgRate"]')!;
+  const diagAvgRateSub = view.querySelector<HTMLElement>('[data-w="diagAvgRateSub"]')!;
+
+  // Session-level baselines that don't belong in the controller — they bracket
+  // "since the user pressed Start in this view" rather than controller lifetime.
+  let sessionStartMs: number | null = null;
+  let attemptHashesBaseline = 0;
+  let lastAttemptStartedAt: number | null = null;
 
   node.miner.setWorkerCount(savedThreads);
   node.miner.setThrottle(savedThrottlePct / 100);
@@ -194,6 +252,130 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     return { blocks: sessionBlocks, reward: sessionReward, lifetime: lifetimeReward };
   }
 
+  function refreshDiagnostics(): void {
+    const s = node.miner.getStatus();
+    if (!s.running) {
+      diagIdle.hidden = false;
+      diagBody.hidden = true;
+      sessionStartMs = null;
+      attemptHashesBaseline = 0;
+      return;
+    }
+    diagIdle.hidden = true;
+    diagBody.hidden = false;
+    const now = performance.now();
+    if (sessionStartMs === null) sessionStartMs = now;
+    // Snapshot session-total hashes on every fresh attempt so the per-attempt
+    // counter resets to 0 when a block is mined and a new template starts.
+    if (s.attemptStartedAt !== lastAttemptStartedAt) {
+      lastAttemptStartedAt = s.attemptStartedAt;
+      attemptHashesBaseline = s.totalHashes;
+    }
+
+    // Per-worker rows. A worker that hasn't reported in >10s gets a red
+    // "stale" tag — that's the symptom of a dead grind loop. Newly-spawned
+    // workers get a 4-second grace window so we don't flag them while
+    // they're still warming up.
+    const rates = s.workerHashrates;
+    const lastAt = s.workerLastReportAt;
+    const STALE_MS = 10_000;
+    const WARMUP_MS = 4_000;
+    const peak = Math.max(1, ...rates);
+    let firstStaleIdx = -1;
+    let staleAgeSec = 0;
+    const rows: string[] = [];
+    for (let i = 0; i < rates.length; i++) {
+      const r = rates[i] ?? 0;
+      const since = now - (lastAt[i] ?? now);
+      const stale = since > STALE_MS && since > WARMUP_MS;
+      if (stale && firstStaleIdx < 0) {
+        firstStaleIdx = i;
+        staleAgeSec = Math.round(since / 1000);
+      }
+      const pct = Math.max(2, Math.round((r / peak) * 100));
+      const barColor = stale ? 'var(--red)' : (r > 0 ? 'var(--accent)' : 'var(--muted-2)');
+      const label = `${formatHashNumber(r)} ${formatHashUnit(r)}`;
+      const tag = stale ? `<span class="red mono text-sm">stale ${staleAgeSec}s</span>` : '';
+      rows.push(`
+        <div class="row" style="align-items:center; gap:10px;">
+          <div class="mono text-sm" style="width:28px; ${stale ? 'color:var(--red);' : ''}">#${i + 1}</div>
+          <div style="flex:1; height:6px; background:var(--surface-2); border-radius:3px; overflow:hidden;">
+            <div style="height:100%; width:${pct}%; background:${barColor};"></div>
+          </div>
+          <div class="mono text-sm" style="width:90px; text-align:right; ${stale ? 'color:var(--red);' : ''}">${label}</div>
+          <div style="width:80px; text-align:right;">${tag}</div>
+        </div>`);
+    }
+    diagWorkers.innerHTML = rows.join('');
+
+    // Current attempt + expected difficulty work.
+    const nextHeight = node.chain.height + 1;
+    const headers = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
+    const diff = nextDifficulty(nextHeight, headers, Math.floor(Date.now() / 1000));
+    const target = compactToTarget(diff);
+    const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;
+    const expectedNum = Number(expected);
+    const elapsedMs = s.attemptStartedAt !== null ? now - s.attemptStartedAt : 0;
+    const elapsedSec = elapsedMs / 1000;
+    const attemptHashes = Math.max(0, s.totalHashes - attemptHashesBaseline);
+
+    diagElapsed.textContent = elapsedSec > 0 ? formatDuration(Math.floor(elapsedSec)) : 'starting…';
+    diagAttempts.textContent = `attempt #${s.attemptCount} (template restarts)`;
+    diagAttemptHashes.textContent = formatBig(BigInt(Math.max(0, Math.floor(attemptHashes))));
+    diagAttemptHashesSub.textContent = `expected ~${formatBig(expected)} for one block`;
+
+    let pFound = 0;
+    if (expectedNum > 0 && s.hashesPerSecond > 0 && elapsedSec > 0) {
+      const lambda = s.hashesPerSecond / expectedNum;
+      pFound = 1 - Math.exp(-lambda * elapsedSec);
+    }
+    const pPct = pFound * 100;
+    diagPFound.textContent = `${pPct < 1 ? pPct.toFixed(2) : pPct.toFixed(1)}%`;
+    diagPFound.style.color = pFound > 0.95 ? 'var(--red)' : pFound > 0.5 ? 'var(--accent)' : '';
+    if (pFound > 0.95) {
+      diagPFoundSub.textContent = `you'd normally have a block by now`;
+    } else if (pFound > 0.5) {
+      diagPFoundSub.textContent = `solid chance you'd have one already`;
+    } else {
+      diagPFoundSub.textContent = `below 95% is still bad-luck range`;
+    }
+
+    const sessionElapsedSec = (now - sessionStartMs) / 1000;
+    const avg = sessionElapsedSec > 0 ? s.totalHashes / sessionElapsedSec : 0;
+    diagAvgRate.textContent =
+      `${formatHashNumber(avg)} ${formatHashUnit(avg)} / ${formatHashNumber(s.hashesPerSecond)} ${formatHashUnit(s.hashesPerSecond)}`;
+    diagAvgRateSub.textContent = `total ${formatBig(BigInt(Math.max(0, Math.floor(s.totalHashes))))} hashes this session`;
+
+    // Soft-hint banner. Highest-severity first; only one shown at a time.
+    let hint: { cls: string; html: string } | null = null;
+    if (firstStaleIdx >= 0) {
+      hint = {
+        cls: 'conn-strip bad',
+        html: `<span class="dot"></span> Worker #${firstStaleIdx + 1} hasn't reported in ${staleAgeSec}s — likely stalled. Try <b>Stop</b> then <b>Start</b>.`,
+      };
+    } else if (pFound > 0.95 && expectedNum > 0 && s.hashesPerSecond > 0) {
+      const meanSec = expectedNum / s.hashesPerSecond;
+      if (elapsedSec > 3 * meanSec) {
+        hint = {
+          cls: 'conn-strip warn',
+          html: `<span class="dot"></span> You'd normally have a block by now (${pPct.toFixed(1)}%). Could still be bad luck — worth a restart if it persists.`,
+        };
+      }
+    } else if (sessionElapsedSec > 300 && s.hashesPerSecond > 0 && avg < 0.5 * s.hashesPerSecond) {
+      hint = {
+        cls: 'conn-strip warn',
+        html: `<span class="dot"></span> Session average is far below the live rate — workers may be wasting cycles on stale templates.`,
+      };
+    }
+    if (hint) {
+      diagBanner.className = hint.cls;
+      diagBanner.innerHTML = hint.html;
+      diagBanner.hidden = false;
+    } else {
+      diagBanner.hidden = true;
+    }
+  }
+
   function refresh(): void {
     const s = node.miner.getStatus();
     toggleBtn.textContent = s.running ? 'Stop mining' : 'Start mining';
@@ -226,16 +408,31 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     sessRewardEl.textContent = `${formatAmount(stats.reward)} ${TICKER}`;
     lifetimeEl.textContent = `lifetime: ${formatAmount(stats.lifetime)} ${TICKER}`;
     rewardEl.textContent = `${formatAmount(blockReward(nextHeight))} ${TICKER}`;
+
+    refreshDiagnostics();
   }
 
   // "Grinding" effect — flicker a fake nonce-progress string while mining.
+  // Also bump the diagnostics "elapsed" reading every tick so it ticks
+  // smoothly instead of in 3-second jumps with the rest of refresh().
+  let diagTickAcc = 0;
   const tickerId = setInterval(() => {
     const s = node.miner.getStatus();
     if (!s.running || s.hashesPerSecond <= 0) {
       tickerEl.textContent = s.running ? '— warming up —' : '— waiting —';
-      return;
+    } else {
+      tickerEl.textContent = `nonce 0x${randomHex(8)}  hash 0x${randomHex(12)}…`;
     }
-    tickerEl.textContent = `nonce 0x${randomHex(8)}  hash 0x${randomHex(12)}…`;
+    // ~1s cadence for the elapsed text — the other diag fields move slowly
+    // and don't need the full 120ms refresh rate.
+    diagTickAcc += 120;
+    if (diagTickAcc >= 1000) {
+      diagTickAcc = 0;
+      if (s.running && s.attemptStartedAt !== null) {
+        const sec = Math.floor((performance.now() - s.attemptStartedAt) / 1000);
+        diagElapsed.textContent = sec > 0 ? formatDuration(sec) : 'starting…';
+      }
+    }
   }, 120);
 
   function refreshConnStrip(): void {
