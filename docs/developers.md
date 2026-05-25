@@ -194,7 +194,7 @@ Source: `POW_PARAMS` in `src/crypto/pow.ts`.
 
 A header is valid when `bigEndianUint256(powHash(header_bytes)) < compactToTarget(header.difficulty)`. See `hashMeetsTarget` in `src/util/binary.ts`.
 
-Per-verify cost on a typical laptop CPU: roughly 40–125 ms. JS reference implementation uses `hash-wasm`; any conformant Argon2id implementation works.
+Per-verify cost on a typical laptop CPU: roughly 40–125 ms. JS reference implementation uses [`openpgpjs/argon2id`](https://github.com/openpgpjs/argon2id) (wasm with JS-managed memory — one allocation per worker, reused forever, avoids the per-call WASM OOM other libraries hit under heavy contention). Any RFC 9106 conformant Argon2id implementation produces the same hash for the same parameters.
 
 > Verifiers must match the constants in `POW_PARAMS` above exactly. The same params are restated in the README and About page for humans; the authoritative source is always `src/crypto/pow.ts`.
 

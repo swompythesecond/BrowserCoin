@@ -84,14 +84,14 @@ async function grind(msg: StartMsg, myGen: number): Promise<void> {
       header[NONCE_OFFSET + 2] = (nonce >>> 8) & 0xff;
       header[NONCE_OFFSET + 3] = nonce & 0xff;
 
-      // hash-wasm instantiates a fresh 32MB WebAssembly.Memory for every
-      // Argon2id call. With many workers contending for the browser's
-      // process-wide WASM memory budget, that allocation can fail with a
-      // RangeError ("Out of memory: Cannot allocate Wasm memory…"). An
-      // unhandled rejection would silently kill this grind loop and leave
-      // the worker permanently idle — telegraph it to the main thread,
-      // back off briefly so the OS can release pages, and retry the same
-      // nonce on the next outer iteration.
+      // Argon2id allocations are stable with the openpgpjs/argon2id lib —
+      // one WebAssembly.Memory per worker at module load, reused forever.
+      // This try/catch is a safety net: if the one-time 65 MB allocation
+      // ever fails at startup, or some other unexpected error throws
+      // inside powHash, telegraph it to the main thread (counted as oom),
+      // back off briefly, and retry. An unhandled rejection would silently
+      // kill the grind loop and leave the worker idle, so we always want
+      // to catch.
       let h: Uint8Array;
       try {
         h = await powHash(header);
