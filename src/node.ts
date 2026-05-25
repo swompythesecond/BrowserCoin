@@ -27,7 +27,7 @@ import {
  * cleared on next load — stops the browser from trying to restore blocks that
  * the new server will reject. Must stay in lock-step with server/api.ts.
  */
-export const CHAIN_VERSION = 'browsercoin-pow-v3';
+export const CHAIN_VERSION = 'browsercoin-pow-v4';
 
 type ChainListener = () => void;
 

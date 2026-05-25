@@ -21,6 +21,15 @@ export interface MinerStatus {
   hashesPerSecond: number;
   currentHeight: number;
   currentTxCount: number;
+  /**
+   * Compact difficulty of the template the workers are currently grinding.
+   * `null` while idle. This is the source of truth for "how hard is the
+   * block I'm mining right now" — UI should NOT derive this from a fresh
+   * `nextDifficulty()` call, because that returns what the rules would
+   * give *if a new template were built right now*, which can disagree
+   * with what the workers are actually doing until the next refresh.
+   */
+  currentDifficulty: number | null;
   throttle: number; // 0..1
   workerCount: number;
   /** High-level control mode. In 'auto', the threads-tuner runs and CPU% is
@@ -87,6 +96,7 @@ export class MinerController {
     hashesPerSecond: 0,
     currentHeight: 0,
     currentTxCount: 0,
+    currentDifficulty: null,
     throttle: 1,
     workerCount: 1,
     workerHashrates: [],
@@ -263,8 +273,10 @@ export class MinerController {
     this.terminateWorkers();
     this.status.hashesPerSecond = 0;
     this.status.attemptStartedAt = null;
+    this.status.currentDifficulty = null;
     this.status.workerHashrates = [];
     this.status.workerLastReportAt = [];
+    this.currentTemplate = null;
     this.emit();
   }
 
@@ -355,8 +367,29 @@ export class MinerController {
       // 3. Auto-tune thread count in auto mode — back off on OOM, probe up
       //    when there's headroom.
       this.autoTune(now);
+      // 4. Re-template if the live difficulty has moved off what we're
+      //    grinding. The template's timestamp is fixed at build time, but
+      //    consensus rules (in particular the emergency drop) can change
+      //    the valid difficulty as wall clock advances past the parent.
+      //    Without this check the worker would keep grinding the old
+      //    pre-stall difficulty for hours even after the rules eased.
+      this.refreshTemplateIfDifficultyChanged();
       this.emit();
     }, 1000);
+  }
+
+  private refreshTemplateIfDifficultyChanged(): void {
+    if (!this.currentTemplate) return;
+    const parent = this.chain.tip.block.header;
+    const recent = this.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
+    const liveDiff = nextDifficulty(
+      parent.height + 1,
+      recent,
+      Math.floor(Date.now() / 1000),
+    );
+    if (liveDiff !== this.currentTemplate.block.header.difficulty) {
+      this.restartTemplate();
+    }
   }
 
   /** Auto-mode threads tuner. Runs once per probe interval (~30s) when the
@@ -523,6 +556,7 @@ export class MinerController {
     this.currentTemplate = { block: { header, transactions: txs } };
     this.status.currentHeight = height;
     this.status.currentTxCount = txs.length;
+    this.status.currentDifficulty = difficulty;
     this.status.attemptStartedAt = performance.now();
     this.status.attemptCount++;
     this.emit();

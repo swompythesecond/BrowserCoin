@@ -133,24 +133,24 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
         <div data-w="diagWorkers" style="display:grid; gap:4px; margin-bottom:14px;"></div>
         <div class="grid grid-2">
           <div class="stat-tile">
-            <div class="stat-label">Elapsed (this attempt)</div>
+            <div class="stat-label">Elapsed on this template</div>
             <div class="stat-value mono" data-w="diagElapsed">—</div>
-            <div class="stat-sub" data-w="diagAttempts">attempt #—</div>
+            <div class="stat-sub" data-w="diagAttempts">template #—</div>
           </div>
           <div class="stat-tile">
-            <div class="stat-label">Hashes (this attempt)</div>
+            <div class="stat-label">Hashes on this template</div>
             <div class="stat-value mono" data-w="diagAttemptHashes">—</div>
-            <div class="stat-sub" data-w="diagAttemptHashesSub">expected ~—</div>
+            <div class="stat-sub" data-w="diagAttemptHashesSub">template needs ~— hashes</div>
           </div>
           <div class="stat-tile">
             <div class="stat-label">P(found by now)</div>
             <div class="stat-value mono" data-w="diagPFound">—</div>
-            <div class="stat-sub" data-w="diagPFoundSub">below 95% is still bad-luck range</div>
+            <div class="stat-sub" data-w="diagPFoundSub">under 95% is still normal-luck territory</div>
           </div>
           <div class="stat-tile">
-            <div class="stat-label">Avg / live hashrate</div>
+            <div class="stat-label">Hashrate</div>
             <div class="stat-value mono" data-w="diagAvgRate">—</div>
-            <div class="stat-sub" data-w="diagAvgRateSub">total — hashes this session</div>
+            <div class="stat-sub" data-w="diagAvgRateSub">session avg / live</div>
           </div>
           <div class="stat-tile" data-w="diagOomTile" style="grid-column: 1 / -1;">
             <div class="stat-label">WebAssembly OOM events</div>
@@ -181,7 +181,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     title: 'Mining diagnostics',
     info: {
       title: 'Mining diagnostics',
-      body: `Per-worker hashrate, time on the current attempt, and the probability you should have found a block by now.\n\nPoW inter-arrival is exponential — the standard deviation equals the mean. A block taking 3-4× the mean is unusual but not anomalous; below 95% probability you're still in normal-luck territory. If a worker stops reporting for >10s, or the session-average hashrate falls well under the live number, something is likely wrong.`,
+      body: `Per-worker hashrate plus stats on the *current template* — the specific block header your workers are grinding nonces against. The template's difficulty doesn't change while you're grinding it: it's frozen at build time. The controller rebuilds it whenever consensus rules would give a different difficulty (e.g. emergency drop kicks in), and on every new block or new tx in the mempool. P(found by now) compares hashes done on the current template against how many a block needs on average. PoW is memoryless — restarting at 99% probability does NOT improve your odds for the next hash; you just reset the counter. A few templates in a row reaching 95%+ is unlucky but not anomalous.`,
     },
   }));
 
@@ -389,43 +389,53 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     }
     diagWorkers.innerHTML = rows.join('');
 
-    // Current attempt + expected difficulty work.
-    const nextHeight = node.chain.height + 1;
-    const headers = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
-    const diff = nextDifficulty(nextHeight, headers, Math.floor(Date.now() / 1000));
-    const target = compactToTarget(diff);
+    // Source of truth for "what the worker is grinding right now" is the
+    // template's recorded difficulty (set in MinerController.restartTemplate).
+    // The previous version of this code re-ran nextDifficulty() with the
+    // current wall clock, which was wrong: it showed what consensus *would*
+    // give for a fresh template, not what the worker was actually doing.
+    // With the controller's periodic-refresh fix, the two converge — but
+    // using the template value directly is correct by construction.
+    const templateDiff = s.currentDifficulty ?? 0;
+    const target = templateDiff > 0 ? compactToTarget(templateDiff) : 0n;
     const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;
     const expectedNum = Number(expected);
+    const bits = target <= 0n ? 0 : 256 - target.toString(2).length;
     const elapsedMs = s.attemptStartedAt !== null ? now - s.attemptStartedAt : 0;
     const elapsedSec = elapsedMs / 1000;
     const attemptHashes = Math.max(0, s.totalHashes - attemptHashesBaseline);
 
     diagElapsed.textContent = elapsedSec > 0 ? formatDuration(Math.floor(elapsedSec)) : 'starting…';
-    diagAttempts.textContent = `attempt #${s.attemptCount} (template restarts)`;
+    diagAttempts.textContent = `template #${s.attemptCount}, ${bits} bits`;
     diagAttemptHashes.textContent = formatBig(BigInt(Math.max(0, Math.floor(attemptHashes))));
-    diagAttemptHashesSub.textContent = `expected ~${formatBig(expected)} for one block`;
+    diagAttemptHashesSub.textContent =
+      expected > 0n
+        ? `template needs ~${formatBig(expected)} hashes on average`
+        : `template needs — hashes`;
 
     let pFound = 0;
-    if (expectedNum > 0 && s.hashesPerSecond > 0 && elapsedSec > 0) {
-      const lambda = s.hashesPerSecond / expectedNum;
-      pFound = 1 - Math.exp(-lambda * elapsedSec);
+    if (expectedNum > 0 && attemptHashes > 0) {
+      // Use total hashes vs expected — this is the cleanest "should I have
+      // found one by now" metric, independent of current hashrate noise.
+      pFound = 1 - Math.exp(-attemptHashes / expectedNum);
     }
     const pPct = pFound * 100;
     diagPFound.textContent = `${pPct < 1 ? pPct.toFixed(2) : pPct.toFixed(1)}%`;
     diagPFound.style.color = pFound > 0.95 ? 'var(--red)' : pFound > 0.5 ? 'var(--accent)' : '';
     if (pFound > 0.95) {
-      diagPFoundSub.textContent = `you'd normally have a block by now`;
+      diagPFoundSub.textContent = `unlucky — but PoW is memoryless, restarting doesn't help`;
     } else if (pFound > 0.5) {
-      diagPFoundSub.textContent = `solid chance you'd have one already`;
+      diagPFoundSub.textContent = `solid chance one was already due`;
     } else {
-      diagPFoundSub.textContent = `below 95% is still bad-luck range`;
+      diagPFoundSub.textContent = `under 95% is still normal-luck territory`;
     }
 
     const sessionElapsedSec = (now - sessionStartMs) / 1000;
     const avg = sessionElapsedSec > 0 ? s.totalHashes / sessionElapsedSec : 0;
     diagAvgRate.textContent =
       `${formatHashNumber(avg)} ${formatHashUnit(avg)} / ${formatHashNumber(s.hashesPerSecond)} ${formatHashUnit(s.hashesPerSecond)}`;
-    diagAvgRateSub.textContent = `total ${formatBig(BigInt(Math.max(0, Math.floor(s.totalHashes))))} hashes this session`;
+    diagAvgRateSub.textContent =
+      `session avg / live · ${formatBig(BigInt(Math.max(0, Math.floor(s.totalHashes))))} total hashes`;
 
     diagOom.textContent = String(s.oomCount);
     diagOom.style.color = s.oomCount > 0 ? 'var(--red)' : '';
@@ -495,9 +505,17 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     blockEl.textContent = s.currentHeight > 0 ? `#${s.currentHeight}` : '—';
     txsEl.textContent = `${s.currentTxCount} ${s.currentTxCount === 1 ? 'tx' : 'txs'} included`;
 
+    // When mining, show the difficulty of the template the worker is actually
+    // grinding (truth). When idle, fall back to the freshly-computed difficulty
+    // so the user can preview what they'd start at if they hit Start now.
     const nextHeight = node.chain.height + 1;
-    const headers = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
-    const diff = nextDifficulty(nextHeight, headers, Math.floor(Date.now() / 1000));
+    let diff: number;
+    if (s.running && s.currentDifficulty !== null) {
+      diff = s.currentDifficulty;
+    } else {
+      const headers = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
+      diff = nextDifficulty(nextHeight, headers, Math.floor(Date.now() / 1000));
+    }
     const target = compactToTarget(diff);
     const bits = target <= 0n ? 256 : 256 - target.toString(2).length;
     const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;

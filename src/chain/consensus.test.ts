@@ -197,16 +197,16 @@ describe('difficulty (per-block sliding window, MTP-derived, symmetric clamp, fl
     expect(hard).toBeGreaterThan(easy);
   });
 
-  it('MTP smooths a single-timestamp lie — one bad timestamp barely moves retarget', () => {
-    // Two identical chains except for one outlier timestamp in the middle.
-    // Because retargeting uses MTP-derived spans, a single lying header
-    // shouldn't visibly move difficulty.
+  it('mid-window timestamp manipulation cannot move the retarget', () => {
+    // Raw-timestamp span uses only the window's first and last header. A
+    // miner who lied about a block in the middle of the window changes
+    // nothing in the retarget calculation — strictly stronger than the
+    // v3 MTP-of-windows approach where a median outlier could still shift
+    // the result when the window was small.
     const cleanHeaders: BlockHeader[] = [];
     for (let i = 0; i < LOOKBACK; i++) cleanHeaders.push(fakeHeader(i, 1_000 + i * TARGET_BLOCK_TIME_S, GENESIS_DIFFICULTY_COMPACT));
 
     const cheatedHeaders = cleanHeaders.map((h) => ({ ...h }));
-    // Push one middle timestamp far into the future. Without MTP, this would
-    // shrink the apparent span; with MTP-of-11 it stays a non-median outlier.
     const midIdx = Math.floor(cheatedHeaders.length / 2);
     cheatedHeaders[midIdx]!.timestamp += TARGET_BLOCK_TIME_S * 100;
 
@@ -214,5 +214,33 @@ describe('difficulty (per-block sliding window, MTP-derived, symmetric clamp, fl
     const clean = nextDifficulty(LOOKBACK, cleanHeaders, ts);
     const cheated = nextDifficulty(LOOKBACK, cheatedHeaders, ts);
     expect(cheated).toBe(clean);
+  });
+
+  it('bursty block times track reality, not the median', () => {
+    // Regression test for the v3 "oscillation" bug. In v3, an early cluster
+    // of fast blocks would dominate the MTP-of-windows median for many
+    // retargets after the cluster ended, falsely reporting "blocks are
+    // still very fast" → difficulty climbed every block until it
+    // overshot wildly. v4 uses raw timestamps so the span tracks actual
+    // wall clock.
+    const harder = targetToCompact(compactToTarget(GENESIS_DIFFICULTY_COMPACT) / 16n);
+    const headers: BlockHeader[] = [];
+    headers.push(fakeHeader(0, 1_000_000, GENESIS_DIFFICULTY_COMPACT)); // genesis
+    // Twelve blocks in a 50-second burst at the start (free-mining boot).
+    for (let i = 1; i <= 12; i++) headers.push(fakeHeader(i, 1_779_000_000 + (i - 1) * 5, harder));
+    // Then ten blocks at roughly target pace.
+    for (let i = 13; i <= 22; i++) headers.push(fakeHeader(i, 1_779_000_055 + (i - 12) * TARGET_BLOCK_TIME_S, harder));
+
+    // The last 10 blocks landed at target pace — so the next retarget
+    // should leave difficulty close to where it was, not crank it
+    // 2× harder because of the early burst.
+    const candidateTs = headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S;
+    const next = nextDifficulty(23, headers, candidateTs);
+    const oldTarget = compactToTarget(harder);
+    const newTarget = compactToTarget(next);
+    // newTarget should be within ~2× of oldTarget (the early burst still
+    // counts proportionally in the average, but not catastrophically).
+    expect(newTarget).toBeGreaterThanOrEqual(oldTarget / 4n);
+    expect(newTarget).toBeLessThanOrEqual(oldTarget * 4n);
   });
 });

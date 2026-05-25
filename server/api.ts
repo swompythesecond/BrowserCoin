@@ -47,7 +47,7 @@ const STALE_PEER_MS = 60_000;
  * on first startup of the new build instead of trying — and failing — to
  * replay blocks the new validator rejects.
  */
-const CHAIN_VERSION = 'browsercoin-pow-v3';
+const CHAIN_VERSION = 'browsercoin-pow-v4';
 /**
  * A miner is "active" if they reported mining=true within this window. Set
  * to 3× the client heartbeat interval (30s) so a single missed heartbeat

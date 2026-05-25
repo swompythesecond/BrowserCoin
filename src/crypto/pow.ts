@@ -32,12 +32,16 @@ import { SIMD_WASM_BASE64, NO_SIMD_WASM_BASE64 } from './argon2id-wasm.js';
  */
 
 // Network-wide fixed salt. The version suffix gives a clean hard-fork path:
-// bump to "...v4" to invalidate the old chain.
+// bump to "...v5" to invalidate the old chain.
 //
 // v3 (2026-05): emergency-drop / difficulty-floor consensus fix. v2 chains
 // allowed difficulty to crash to MAX_TARGET after a stall, enabling free
-// reorgs. See consensus.ts for the new rules.
-const SALT = new TextEncoder().encode('browsercoin-pow-v3');
+// reorgs.
+// v4 (2026-05): retarget uses raw timestamps instead of MTP-of-windows. v3
+// chains oscillated between overshoot (~18 bits) and floor (1 bit) for a
+// single-miner network because the MTP median snapped between clusters of
+// burst-mined blocks. See consensus.ts for the new rules.
+const SALT = new TextEncoder().encode('browsercoin-pow-v4');
 
 export const POW_PARAMS = {
   memorySize: 32 * 1024, // KiB → 32 MB

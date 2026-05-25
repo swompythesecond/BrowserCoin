@@ -42,25 +42,29 @@ export async function checkPoW(header: BlockHeader): Promise<boolean> {
  * use. Caller passes the candidate block's intended timestamp so the
  * emergency-drop rule can fire.
  *
- * Per-block retargeting with a sliding window. Defenses against hashrate
- * gaming and timestamp manipulation:
- *   1. The "actual span" is measured between two MEDIAN-TIME-PAST values —
- *      one at the window start and one at the window end — instead of raw
- *      header timestamps. A miner who lies on a single timestamp moves MTP
- *      by less than 1/11 of the lie.
- *   2. The retarget step is symmetric: target may move by at most a factor
- *      of MAX_RETARGET_FACTOR_UP per block in either direction. A wider
- *      "down" step (v2 used 4×) compounded with the emergency drop to
- *      crash difficulty to MAX_TARGET in just a few blocks after a stall.
- *   3. Emergency drop requires TWO consecutive slow intervals: both the
- *      candidate's gap from its parent AND the parent's gap from its
- *      grandparent must exceed EMERGENCY_DROP_MULT × target. A lone
- *      attacker can't fabricate the grandparent's timestamp, so they
- *      can't manufacture a one-off discounted block.
- *   4. Floor: the returned target is clamped to FLOOR_TARGET, so even
- *      sustained stalls can't take difficulty below the chain's bootstrap
- *      value. This is the structural guarantee that block production
- *      always costs at least the genesis amount of work.
+ * Per-block retargeting with a sliding window. Design choices:
+ *   1. Span is measured with RAW timestamps (first vs last header in the
+ *      window), not MTP-of-windows. The v3 MTP-on-span approach broke for
+ *      bursty block times: when most of the MTP window was an old cluster,
+ *      the median was *also* an old cluster, so actualSpan kept reporting
+ *      "blocks are sub-second apart" even when recent blocks were taking
+ *      hours. The retarget then bounced between overshoot and floor. Raw
+ *      timestamps don't have that pathology — they track reality. MTP is
+ *      still applied as a per-block validity check (see
+ *      `medianTimePast` / `addBlockInternal`), which combined with the
+ *      tight MAX_FUTURE_TIME_S bounds single-block timestamp manipulation
+ *      to a small fraction of one block's worth of work.
+ *   2. Symmetric retarget caps: target may move by at most a factor of
+ *      MAX_RETARGET_FACTOR_{UP,DOWN} per block (both = 2). A wider down
+ *      step would let one slow block trigger a cascade.
+ *   3. Two-interval emergency drop: both the candidate's gap from its
+ *      parent AND the parent's gap from its grandparent must exceed
+ *      EMERGENCY_DROP_MULT × target before target doubles. A lone miner
+ *      can't fabricate the grandparent's timestamp, so they can't farm
+ *      cheap one-off blocks via timestamp games.
+ *   4. Floor: target is clamped to FLOOR_TARGET (genesis difficulty), so
+ *      no combination of stalls can drop block-production cost below the
+ *      bootstrap value. Stops the "thin chain" / cheap-reorg attack.
  *
  * `previousHeaders` should contain the parent chain headers, sorted
  * ascending. The function reads up to DIFFICULTY_WINDOW + MTP_WINDOW − 1
@@ -112,15 +116,12 @@ export function nextDifficulty(
   const blockCount = Math.max(1, prev.height - first.height);
   const expectedSpan = TARGET_BLOCK_TIME_S * blockCount;
 
-  // MTP at both ends of the window. The "...UpTo" helper takes the median of
-  // up to MTP_WINDOW headers ending at and including a given index.
-  const endMTP = mtpUpTo(previousHeaders, previousHeaders.length - 1);
-  const startMTP = mtpUpTo(previousHeaders, firstIdx);
-  const actualSpan = Math.max(1, endMTP - startMTP);
+  // Raw timestamp span. See the function header for why MTP smoothing is
+  // applied to per-block validity but NOT to the span calc.
+  const actualSpan = Math.max(1, prev.timestamp - first.timestamp);
 
   // Clamp actualSpan so the resulting target moves at most a factor of
-  // MAX_RETARGET_FACTOR_{UP,DOWN} per block. With symmetric caps these are
-  // equal — kept as separate names for clarity.
+  // MAX_RETARGET_FACTOR_{UP,DOWN} per block.
   const minActual = Math.floor(expectedSpan / MAX_RETARGET_FACTOR_UP);
   const maxActual = expectedSpan * MAX_RETARGET_FACTOR_DOWN;
   const clampedActual = Math.max(minActual, Math.min(maxActual, actualSpan));
