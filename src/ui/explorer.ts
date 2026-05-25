@@ -1,5 +1,5 @@
 import { hashHeader } from '../chain/block.js';
-import { bytesToHex } from '../util/binary.js';
+import { bytesToHex, compactToTarget } from '../util/binary.js';
 import { formatAmount } from '../node.js';
 import type { Node } from '../node.js';
 import { TICKER } from '../brand.js';
@@ -15,7 +15,13 @@ interface BlockRow {
   miner: string;
   ts: number;
   totalFees: bigint;
+  difficulty: number;
   txs: Array<{ from: string; to: string; amount: bigint; fee: bigint; nonce: number }>;
+}
+
+function difficultyBits(compact: number): number {
+  const target = compactToTarget(compact);
+  return target <= 0n ? 256 : 256 - target.toString(2).length;
 }
 
 /**
@@ -41,7 +47,7 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
       <div class="table-scroll mt-md">
         <table class="table">
           <thead><tr>
-            <th>height</th><th>hash</th><th>txs</th><th class="col-hide-sm">miner</th><th class="col-hide-sm">fees</th><th>time</th>
+            <th>height</th><th>hash</th><th>txs</th><th class="col-hide-sm">miner</th><th class="col-hide-sm">fees</th><th class="col-hide-sm">diff</th><th>time</th>
           </tr></thead>
           <tbody data-w="blockRows"></tbody>
         </table>
@@ -80,6 +86,7 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
         miner: bytesToHex(h.miner).slice(0, 12) + '…',
         ts: h.timestamp,
         totalFees: fees,
+        difficulty: h.difficulty,
         txs: cb.block.transactions.map((tx) => ({
           from: bytesToHex(tx.from).slice(0, 12) + '…',
           to: bytesToHex(tx.to).slice(0, 12) + '…',
@@ -93,10 +100,10 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
   }
 
   function renderRows(rows: BlockRow[]): string {
-    if (rows.length === 0) return `<tr class="table-empty"><td colspan="6">No blocks yet.</td></tr>`;
+    if (rows.length === 0) return `<tr class="table-empty"><td colspan="7">No blocks yet.</td></tr>`;
     return rows.map((b) => {
       const detail = expanded.has(b.height)
-        ? `<tr><td colspan="6" style="background: var(--surface); padding: 0;">
+        ? `<tr><td colspan="7" style="background: var(--surface); padding: 0;">
             <div style="padding: 12px 16px;">
               <div class="label-caps" style="margin-bottom:8px;">${b.txs.length} transaction${b.txs.length === 1 ? '' : 's'}</div>
               ${b.txs.length === 0
@@ -120,6 +127,7 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
         <td class="mono">${b.txCount}</td>
         <td class="addr col-hide-sm">${b.miner}</td>
         <td class="mono muted col-hide-sm">${formatAmount(b.totalFees)}</td>
+        <td class="mono muted col-hide-sm" title="0x${b.difficulty.toString(16).padStart(8, '0')}">${difficultyBits(b.difficulty)} bits</td>
         <td class="muted">${new Date(b.ts * 1000).toLocaleTimeString()}</td>
       </tr>${detail}`;
     }).join('');
