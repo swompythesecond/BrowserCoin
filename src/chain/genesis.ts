@@ -61,8 +61,8 @@ export const MAX_RETARGET_FACTOR_DOWN = 4; // target * 4 (difficulty /4) per blo
  */
 export const EMERGENCY_DROP_MULT = 6;
 
-/** Reject blocks whose timestamp is more than 2 hours in the future. */
-export const MAX_FUTURE_TIME_S = 2 * 60 * 60;
+/** Reject blocks whose timestamp is more than 30 minutes in the future. */
+export const MAX_FUTURE_TIME_S = 30 * 60;
 
 /** Max serialized block size (browser-friendly cap). */
 export const MAX_BLOCK_BYTES = 256 * 1024;

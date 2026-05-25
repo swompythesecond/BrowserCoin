@@ -15,7 +15,7 @@ How to read, write, and integrate against a BrowserCoin chain. The HTTP helper s
 | Initial block reward | 50 BRC, halved every 210 000 blocks | `src/chain/genesis.ts` |
 | Max block size | 256 KB | `src/chain/genesis.ts` (`MAX_BLOCK_BYTES`) |
 | Min fee | 1 wei per byte (≥ 152 wei per tx) | `src/chain/genesis.ts` (`MIN_FEE_PER_BYTE`) |
-| Future-time reject | > 2 h ahead of helper clock | `src/chain/genesis.ts` (`MAX_FUTURE_TIME_S`) |
+| Future-time reject | > 30 min ahead of helper clock | `src/chain/genesis.ts` (`MAX_FUTURE_TIME_S`) |
 | Default helper port | `9000` (API), `9001` (PeerJS signaling) | `server/api.ts`, `server/peerjs.ts` |
 
 All integers on the wire are **big-endian**.
