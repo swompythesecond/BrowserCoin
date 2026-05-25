@@ -406,10 +406,17 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     autoCheck.checked = s.mode === 'auto';
     applyAutoStateToHomeUI(s.mode === 'auto');
     if (s.mode === 'auto') {
-      const lockNote = s.autoLocked ? ' (locked after OOM)' : '';
-      autoStatusEl.textContent = s.running
-        ? `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}`
-        : `Threads (auto): up to ${s.autoMaxThreads} when mining`;
+      let detail: string;
+      if (s.autoLocked) {
+        detail = `locked at ${s.workerCount} after OOM`;
+      } else if (!s.running) {
+        detail = `${s.workerCount} → probing up to ${s.autoMaxThreads} once mining`;
+      } else if (s.workerCount >= s.autoMaxThreads) {
+        detail = `${s.workerCount} (at Max ${s.autoMaxThreads})`;
+      } else {
+        detail = `${s.workerCount} → ${s.autoMaxThreads} (probing every 10s)`;
+      }
+      autoStatusEl.textContent = `Threads (auto): ${detail}`;
     }
     // Mirror controller state into both sliders regardless of mode — when
     // auto-tuner moves the thread count we want it visible here too. Skip

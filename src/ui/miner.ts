@@ -519,8 +519,17 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
 
     // Status line (only visible in auto mode — the autoBounds box is shown).
     if (s.mode === 'auto') {
-      const lockNote = s.autoLocked ? ' · locked (OOM)' : s.running ? ' · probing' : ' · idle';
-      autoStatusEl.textContent = `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}. The tuner stays within these bounds.`;
+      let detail: string;
+      if (s.autoLocked) {
+        detail = `locked at ${s.workerCount} after an OOM — raise Max if you want to retry`;
+      } else if (!s.running) {
+        detail = `will probe up from ${s.workerCount} every 10s once you Start mining`;
+      } else if (s.workerCount >= s.autoMaxThreads) {
+        detail = `holding at ${s.workerCount} (hit Max). Raise Max to push further`;
+      } else {
+        detail = `probing up from ${s.workerCount} toward ${s.autoMaxThreads} every 10s — backs off on OOM`;
+      }
+      autoStatusEl.textContent = `Auto: ${detail}.`;
     }
     // Mirror controller state into the sliders so e.g. the auto-tuner moving
     // the thread count is visible, or a switch from elsewhere keeps us in

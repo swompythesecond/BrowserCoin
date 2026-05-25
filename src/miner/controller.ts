@@ -106,7 +106,11 @@ export class MinerController {
   // these directly — only the resulting `workerCount` and `autoLocked`.
   private lastProbeAt = 0;
   private oomCountAtLastProbe = 0;
-  private static readonly PROBE_INTERVAL_MS = 30_000;
+  // 10s is short enough to feel interactive — the user sees the thread count
+  // climb every 10s after enabling auto — and the new argon2id lib makes
+  // per-probe OOM detection a non-issue, so we don't need the long
+  // observation window the old hash-wasm path required.
+  private static readonly PROBE_INTERVAL_MS = 10_000;
   private statusListeners = new Set<(s: MinerStatus) => void>();
   private currentTemplate: { block: Block } | null = null;
 
@@ -177,6 +181,7 @@ export class MinerController {
     autoMax?: number;
   }): void {
     const max = maxMinerWorkers();
+    const transitionedToAuto = opts.mode === 'auto' && this.status.mode !== 'auto';
     if (opts.mode !== undefined) {
       if (opts.mode !== this.status.mode) {
         this.status.mode = opts.mode;
@@ -200,11 +205,18 @@ export class MinerController {
     if (this.status.autoMinThreads > this.status.autoMaxThreads) {
       this.status.autoMinThreads = this.status.autoMaxThreads;
     }
-    // If we just landed in auto mode and the current thread count is outside
-    // the bounds, snap it in. Use the lower bound — the tuner will probe up
-    // from there if there's room.
+    // When the user *just toggled into* auto, always snap to autoMin so the
+    // tuner has a known starting point and the UI gives obvious feedback
+    // ("threads dropped to 1, climbing up"). Without this, e.g. setting
+    // threads to 11 then ticking auto with autoMax=11 would look like a
+    // no-op — auto stays at 11 because it's technically in-range.
+    //
+    // If auto was already on and only the bounds changed, just clamp the
+    // current value into the new range without forcing the floor.
     if (this.status.mode === 'auto') {
-      if (this.status.workerCount < this.status.autoMinThreads) {
+      if (transitionedToAuto) {
+        this.setWorkerCount(this.status.autoMinThreads);
+      } else if (this.status.workerCount < this.status.autoMinThreads) {
         this.setWorkerCount(this.status.autoMinThreads);
       } else if (this.status.workerCount > this.status.autoMaxThreads) {
         this.setWorkerCount(this.status.autoMaxThreads);
