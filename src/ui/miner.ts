@@ -1,5 +1,4 @@
-import { maxMinerWorkers, powerThrottle } from '../miner/controller.js';
-import type { PowerLevel } from '../miner/controller.js';
+import { maxMinerWorkers } from '../miner/controller.js';
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { nextDifficulty } from '../chain/consensus.js';
@@ -12,7 +11,6 @@ import { cardHeader } from './info.js';
 const THREADS_KEY = 'browsercoin:miner-threads';
 const THROTTLE_KEY = 'browsercoin:miner-throttle';
 const MODE_KEY = 'browsercoin:miner-mode';
-const POWER_KEY = 'browsercoin:miner-power';
 const AUTO_MIN_KEY = 'browsercoin:miner-auto-min';
 const AUTO_MAX_KEY = 'browsercoin:miner-auto-max';
 
@@ -84,38 +82,28 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       <section class="card" data-mount="cpu">
         <div data-slot="header"></div>
 
-        <div class="row" style="gap:8px; margin-bottom:14px;">
-          <button class="ghost small" data-w="modeAuto">Auto</button>
-          <button class="ghost small" data-w="modeManual">Manual</button>
-        </div>
+        <label>CPU power: <span data-w="pct">${savedThrottlePct}%</span></label>
+        <input type="range" min="0" max="100" value="${savedThrottlePct}" class="slider" data-w="slider" />
 
-        <div data-w="autoPane">
-          <label class="label-caps" style="margin-bottom:6px;">Power</label>
-          <div class="row" style="gap:6px; margin-bottom:14px;">
-            <button class="ghost small" data-w="powerLow">Low</button>
-            <button class="ghost small" data-w="powerMed">Medium</button>
-            <button class="ghost small" data-w="powerHigh">High</button>
+        <div class="row" style="justify-content:space-between; align-items:center; margin-top:14px;">
+          <label style="margin:0;">Threads: <span data-w="threads">${savedThreads}</span> <span class="muted">/ ${maxThreads} available</span></label>
+          <label class="text-sm" style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" data-w="autoCheck" />
+            auto
+          </label>
+        </div>
+        <input type="range" min="1" max="${maxThreads}" value="${savedThreads}" step="1" class="slider" data-w="threadSlider" ${maxThreads === 1 ? 'disabled' : ''} />
+
+        <div data-w="autoBounds" hidden style="margin-top:10px;">
+          <div class="row" style="gap:12px; align-items:center;">
+            <label class="text-sm" style="flex:1;">Min threads
+              <input type="number" min="1" max="${maxThreads}" value="1" class="mono" style="width:60px; margin-left:6px;" data-w="autoMin" />
+            </label>
+            <label class="text-sm" style="flex:1;">Max threads
+              <input type="number" min="1" max="${maxThreads}" value="${Math.max(2, Math.floor(maxThreads / 2))}" class="mono" style="width:60px; margin-left:6px;" data-w="autoMax" />
+            </label>
           </div>
-          <div class="text-sm muted" data-w="autoStatus">Threads (auto): —</div>
-          <details style="margin-top:12px;">
-            <summary class="text-sm muted" style="cursor:pointer;">Advanced — tuner bounds</summary>
-            <div class="row" style="gap:10px; align-items:center; margin-top:8px;">
-              <label class="text-sm" style="flex:1;">Min threads
-                <input type="number" min="1" max="${maxThreads}" value="1" class="mono" style="width:60px; margin-left:6px;" data-w="autoMin" />
-              </label>
-              <label class="text-sm" style="flex:1;">Max threads
-                <input type="number" min="1" max="${maxThreads}" value="${Math.max(2, Math.floor(maxThreads / 2))}" class="mono" style="width:60px; margin-left:6px;" data-w="autoMax" />
-              </label>
-            </div>
-            <p class="text-sm muted" style="margin:6px 0 0;">The tuner stays within these bounds. Defaults to half your cores — increase Max if you have plenty of RAM and want it to try harder.</p>
-          </details>
-        </div>
-
-        <div data-w="manualPane" hidden>
-          <label>CPU power: <span data-w="pct">${savedThrottlePct}%</span></label>
-          <input type="range" min="0" max="100" value="${savedThrottlePct}" class="slider" data-w="slider" />
-          <label class="mt-md">Threads: <span data-w="threads">${savedThreads}</span> <span class="muted">/ ${maxThreads} available</span></label>
-          <input type="range" min="1" max="${maxThreads}" value="${savedThreads}" step="1" class="slider" data-w="threadSlider" ${maxThreads === 1 ? 'disabled' : ''} />
+          <p class="text-sm muted" style="margin:6px 0 0;" data-w="autoStatus">The tuner stays within these bounds, probing up until your machine pushes back. Default Max is half your cores — raise it if you have RAM to spare.</p>
         </div>
       </section>
 
@@ -219,14 +207,8 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const threadSlider = view.querySelector<HTMLInputElement>('[data-w="threadSlider"]')!;
   const threadsEl = view.querySelector<HTMLElement>('[data-w="threads"]')!;
 
-  // Mode + power UI refs.
-  const modeAutoBtn = view.querySelector<HTMLButtonElement>('[data-w="modeAuto"]')!;
-  const modeManualBtn = view.querySelector<HTMLButtonElement>('[data-w="modeManual"]')!;
-  const autoPane = view.querySelector<HTMLElement>('[data-w="autoPane"]')!;
-  const manualPane = view.querySelector<HTMLElement>('[data-w="manualPane"]')!;
-  const powerLowBtn = view.querySelector<HTMLButtonElement>('[data-w="powerLow"]')!;
-  const powerMedBtn = view.querySelector<HTMLButtonElement>('[data-w="powerMed"]')!;
-  const powerHighBtn = view.querySelector<HTMLButtonElement>('[data-w="powerHigh"]')!;
+  const autoCheck = view.querySelector<HTMLInputElement>('[data-w="autoCheck"]')!;
+  const autoBounds = view.querySelector<HTMLElement>('[data-w="autoBounds"]')!;
   const autoStatusEl = view.querySelector<HTMLElement>('[data-w="autoStatus"]')!;
   const autoMinInput = view.querySelector<HTMLInputElement>('[data-w="autoMin"]')!;
   const autoMaxInput = view.querySelector<HTMLInputElement>('[data-w="autoMax"]')!;
@@ -265,47 +247,24 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     const s0 = node.miner.getStatus();
     autoMinInput.value = String(s0.autoMinThreads);
     autoMaxInput.value = String(s0.autoMaxThreads);
-    applyModeToUI(s0.mode);
-    applyPowerToUI(s0.powerLevel);
+    autoCheck.checked = s0.mode === 'auto';
+    applyAutoStateToUI(s0.mode === 'auto');
   }
 
-  // Selection state uses the .ghost modifier: unselected buttons get .ghost
-  // (muted), selected button drops it (full-strength brand colour).
-  function applyModeToUI(mode: 'auto' | 'manual'): void {
-    const isAuto = mode === 'auto';
-    autoPane.hidden = !isAuto;
-    manualPane.hidden = isAuto;
-    modeAutoBtn.classList.toggle('ghost', !isAuto);
-    modeManualBtn.classList.toggle('ghost', isAuto);
-  }
-  function applyPowerToUI(p: PowerLevel): void {
-    powerLowBtn.classList.toggle('ghost', p !== 'low');
-    powerMedBtn.classList.toggle('ghost', p !== 'medium');
-    powerHighBtn.classList.toggle('ghost', p !== 'high');
+  // "auto" checkbox toggles between the tuner (threads slider grayed +
+  // bounds inputs visible) and manual mode (slider live, bounds hidden).
+  function applyAutoStateToUI(isAuto: boolean): void {
+    threadSlider.disabled = isAuto || maxThreads === 1;
+    threadSlider.style.opacity = isAuto ? '0.5' : '';
+    autoBounds.hidden = !isAuto;
   }
 
-  modeAutoBtn.addEventListener('click', () => {
-    localStorage.setItem(MODE_KEY, 'auto');
-    node.miner.setControlMode({ mode: 'auto' });
-    applyModeToUI('auto');
+  autoCheck.addEventListener('change', () => {
+    const isAuto = autoCheck.checked;
+    localStorage.setItem(MODE_KEY, isAuto ? 'auto' : 'manual');
+    node.miner.setControlMode({ mode: isAuto ? 'auto' : 'manual' });
+    applyAutoStateToUI(isAuto);
   });
-  modeManualBtn.addEventListener('click', () => {
-    localStorage.setItem(MODE_KEY, 'manual');
-    node.miner.setControlMode({ mode: 'manual' });
-    // Manual mode honors whatever the legacy sliders were last set to.
-    node.miner.setThrottle(Number(slider.value) / 100);
-    node.miner.setWorkerCount(clampThreads(Number(threadSlider.value), maxThreads));
-    applyModeToUI('manual');
-  });
-
-  const setPower = (p: PowerLevel): void => {
-    localStorage.setItem(POWER_KEY, p);
-    node.miner.setControlMode({ powerLevel: p });
-    applyPowerToUI(p);
-  };
-  powerLowBtn.addEventListener('click', () => setPower('low'));
-  powerMedBtn.addEventListener('click', () => setPower('medium'));
-  powerHighBtn.addEventListener('click', () => setPower('high'));
 
   autoMinInput.addEventListener('change', () => {
     const v = clampThreads(Number(autoMinInput.value), maxThreads);
@@ -558,24 +517,21 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     lifetimeEl.textContent = `lifetime: ${formatAmount(stats.lifetime)} ${TICKER}`;
     rewardEl.textContent = `${formatAmount(blockReward(nextHeight))} ${TICKER}`;
 
-    // Auto-pane status line.
+    // Status line (only visible in auto mode — the autoBounds box is shown).
     if (s.mode === 'auto') {
-      const lockNote = s.autoLocked ? ' · locked (OOM)' : ' · probing';
-      autoStatusEl.textContent = s.running
-        ? `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}`
-        : `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}] · idle`;
+      const lockNote = s.autoLocked ? ' · locked (OOM)' : s.running ? ' · probing' : ' · idle';
+      autoStatusEl.textContent = `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}. The tuner stays within these bounds.`;
     }
-    // Manual mode: reflect controller state into the sliders so e.g. an
-    // external setWorkerCount call (or initial mount) keeps them in sync.
-    if (s.mode === 'manual') {
-      if (document.activeElement !== slider) {
-        slider.value = String(Math.round(s.throttle * 100));
-        pctEl.textContent = `${Math.round(s.throttle * 100)}%`;
-      }
-      if (document.activeElement !== threadSlider) {
-        threadSlider.value = String(s.workerCount);
-        threadsEl.textContent = String(s.workerCount);
-      }
+    // Mirror controller state into the sliders so e.g. the auto-tuner moving
+    // the thread count is visible, or a switch from elsewhere keeps us in
+    // sync. Skip while the user is actively dragging — would fight input.
+    if (document.activeElement !== slider) {
+      slider.value = String(Math.round(s.throttle * 100));
+      pctEl.textContent = `${Math.round(s.throttle * 100)}%`;
+    }
+    if (document.activeElement !== threadSlider) {
+      threadSlider.value = String(s.workerCount);
+      threadsEl.textContent = String(s.workerCount);
     }
 
     refreshDiagnostics();

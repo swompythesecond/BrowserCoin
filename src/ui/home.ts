@@ -76,21 +76,18 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
         <div class="text-sm muted mt-md" data-w="eta">Press start to begin.</div>
         <div class="conn-strip conn-strip-small" data-w="connStrip" hidden></div>
 
-        <div class="mt-md" data-w="autoPaneHome">
-          <label class="text-sm label-caps" style="display:block; margin-bottom:6px;">Power</label>
-          <div class="row" style="gap:6px;">
-            <button class="ghost small" data-w="powerLow">Low</button>
-            <button class="ghost small" data-w="powerMed">Medium</button>
-            <button class="ghost small" data-w="powerHigh">High</button>
-          </div>
-          <div class="text-sm muted mt-sm" data-w="autoStatus">Threads (auto): —</div>
-        </div>
-
-        <div class="mt-md" data-w="manualPaneHome" hidden>
+        <div class="mt-md">
           <label class="text-sm">CPU power: <span data-w="pct">100%</span></label>
           <input type="range" min="0" max="100" value="100" class="slider" data-w="slider" />
-          <label class="text-sm mt-sm">Threads: <span data-w="threads">1</span> <span class="muted">/ <span data-w="maxThreads">1</span> available</span></label>
+          <div class="row" style="justify-content:space-between; align-items:center; margin-top:8px;">
+            <label class="text-sm" style="margin:0;">Threads: <span data-w="threads">1</span> <span class="muted">/ <span data-w="maxThreads">1</span> available</span></label>
+            <label class="text-sm" style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" data-w="autoCheck" />
+              auto
+            </label>
+          </div>
           <input type="range" min="1" max="1" value="1" step="1" class="slider" data-w="threadSlider" />
+          <div class="text-sm muted mt-sm" data-w="autoStatus" hidden></div>
         </div>
       </section>
 
@@ -240,11 +237,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const threadSlider = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="threadSlider"]')!;
   const threadsEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="threads"]')!;
   const maxThreadsEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="maxThreads"]')!;
-  const autoPaneHome = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="autoPaneHome"]')!;
-  const manualPaneHome = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="manualPaneHome"]')!;
-  const powerLowBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="powerLow"]')!;
-  const powerMedBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="powerMed"]')!;
-  const powerHighBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="powerHigh"]')!;
+  const autoCheck = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="autoCheck"]')!;
   const autoStatusEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="autoStatus"]')!;
 
   const maxThreads = maxMinerWorkers();
@@ -275,24 +268,17 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     node.miner.setWorkerCount(n);
   });
 
-  type PowerLevel = 'low' | 'medium' | 'high';
-  function applyPowerToHomeUI(p: PowerLevel): void {
-    powerLowBtn.classList.toggle('ghost', p !== 'low');
-    powerMedBtn.classList.toggle('ghost', p !== 'medium');
-    powerHighBtn.classList.toggle('ghost', p !== 'high');
+  function applyAutoStateToHomeUI(isAuto: boolean): void {
+    threadSlider.disabled = isAuto || maxThreads === 1;
+    threadSlider.style.opacity = isAuto ? '0.5' : '';
+    autoStatusEl.hidden = !isAuto;
   }
-  function applyModeToHomeUI(mode: 'auto' | 'manual'): void {
-    autoPaneHome.hidden = mode !== 'auto';
-    manualPaneHome.hidden = mode === 'auto';
-  }
-  const setPower = (p: PowerLevel): void => {
-    localStorage.setItem('browsercoin:miner-power', p);
-    node.miner.setControlMode({ powerLevel: p });
-    applyPowerToHomeUI(p);
-  };
-  powerLowBtn.addEventListener('click', () => setPower('low'));
-  powerMedBtn.addEventListener('click', () => setPower('medium'));
-  powerHighBtn.addEventListener('click', () => setPower('high'));
+  autoCheck.addEventListener('change', () => {
+    const isAuto = autoCheck.checked;
+    localStorage.setItem('browsercoin:miner-mode', isAuto ? 'auto' : 'manual');
+    node.miner.setControlMode({ mode: isAuto ? 'auto' : 'manual' });
+    applyAutoStateToHomeUI(isAuto);
+  });
 
   const actRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="activity"] [data-w="actRows"]')!;
 
@@ -415,28 +401,27 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       ? (s.hashesPerSecond > 0 ? `${formatHashrate(s.hashesPerSecond)} grinding — full stats on the Mine tab.` : 'measuring…')
       : 'Press start to begin.';
 
-    // Pane selection + power chip mirror controller state so /mine and home
-    // stay in sync.
-    applyModeToHomeUI(s.mode);
-    applyPowerToHomeUI(s.powerLevel);
+    // Sync the auto checkbox + slider enablement with controller state, so
+    // changes from /mine flow back to the home card immediately.
+    autoCheck.checked = s.mode === 'auto';
+    applyAutoStateToHomeUI(s.mode === 'auto');
     if (s.mode === 'auto') {
       const lockNote = s.autoLocked ? ' (locked after OOM)' : '';
       autoStatusEl.textContent = s.running
         ? `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}`
         : `Threads (auto): up to ${s.autoMaxThreads} when mining`;
-    } else {
-      // Mirror controller state into the sliders so changes made on /mine
-      // (or by the auto-tuner before a mode switch) show up. Skip while the
-      // user is actively dragging — would fight their input.
-      if (document.activeElement !== cpuSlider) {
-        const pct = Math.round(s.throttle * 100);
-        cpuSlider.value = String(pct);
-        cpuPctEl.textContent = `${pct}%`;
-      }
-      if (document.activeElement !== threadSlider) {
-        threadSlider.value = String(s.workerCount);
-        threadsEl.textContent = String(s.workerCount);
-      }
+    }
+    // Mirror controller state into both sliders regardless of mode — when
+    // auto-tuner moves the thread count we want it visible here too. Skip
+    // while the user is actively dragging — would fight their input.
+    if (document.activeElement !== cpuSlider) {
+      const pct = Math.round(s.throttle * 100);
+      cpuSlider.value = String(pct);
+      cpuPctEl.textContent = `${pct}%`;
+    }
+    if (document.activeElement !== threadSlider) {
+      threadSlider.value = String(s.workerCount);
+      threadsEl.textContent = String(s.workerCount);
     }
   }
 

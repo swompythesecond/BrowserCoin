@@ -42,8 +42,6 @@ void node.start();
   const max = maxMinerWorkers();
   // New mode-aware settings, with sensible defaults for first-time users.
   const mode = (localStorage.getItem('browsercoin:miner-mode') === 'manual') ? 'manual' : 'auto';
-  const powerRaw = localStorage.getItem('browsercoin:miner-power');
-  const power = (powerRaw === 'low' || powerRaw === 'medium' || powerRaw === 'high') ? powerRaw : 'medium';
   const defaultAutoMax = Math.max(2, Math.floor(max / 2));
   const rawAutoMin = Number(localStorage.getItem('browsercoin:miner-auto-min'));
   const autoMin = Number.isFinite(rawAutoMin) && rawAutoMin >= 1 ? Math.min(max, Math.floor(rawAutoMin)) : 1;
@@ -60,7 +58,7 @@ void node.start();
 
   node.miner.setWorkerCount(threads);
   node.miner.setThrottle(pct / 100);
-  node.miner.setControlMode({ mode, powerLevel: power, autoMin, autoMax });
+  node.miner.setControlMode({ mode, autoMin, autoMax });
 }
 
 // Persist whether mining is on. Saved state is consulted on next page load
