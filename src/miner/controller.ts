@@ -8,6 +8,14 @@ import { compactToTarget } from '../util/binary.js';
 import { bytesToHex } from '../util/binary.js';
 import type { PublicKey } from '../crypto/keys.js';
 
+export type ControlMode = 'auto' | 'manual';
+export type PowerLevel = 'low' | 'medium' | 'high';
+
+/** Map a power-preset level to the CPU-throttle fraction it applies. */
+export function powerThrottle(p: PowerLevel): number {
+  return p === 'low' ? 0.25 : p === 'medium' ? 0.6 : 1.0;
+}
+
 export interface MinerStatus {
   running: boolean;
   hashesPerSecond: number;
@@ -15,6 +23,19 @@ export interface MinerStatus {
   currentTxCount: number;
   throttle: number; // 0..1
   workerCount: number;
+  /** High-level control mode. In 'auto', the threads-tuner runs and CPU% is
+   *  driven by `powerLevel`. In 'manual', `throttle` and `workerCount` are
+   *  fully user-controlled and the tuner is paused. */
+  mode: ControlMode;
+  /** Active power preset. Only meaningful when `mode === 'auto'`. */
+  powerLevel: PowerLevel;
+  /** Auto-tuner thread bounds. Tuner stays within [autoMin, autoMax]. */
+  autoMinThreads: number;
+  autoMaxThreads: number;
+  /** True once the auto-tuner has hit an OOM event and pinned threads. It
+   *  stops probing upward for the rest of the session; clears on Stop or
+   *  on a mode change. */
+  autoLocked: boolean;
   /** Per-worker last-reported H/s. Length matches `workerCount`. */
   workerHashrates: number[];
   /** `performance.now()` of each worker's last hashrate report. A worker
@@ -74,7 +95,18 @@ export class MinerController {
     attemptStartedAt: null,
     attemptCount: 0,
     oomCount: 0,
+    mode: 'auto',
+    powerLevel: 'medium',
+    autoMinThreads: 1,
+    autoMaxThreads: Math.max(2, Math.floor(maxMinerWorkers() / 2)),
+    autoLocked: false,
   };
+
+  // Auto-tuner state. Lives outside MinerStatus because the UI never needs
+  // these directly — only the resulting `workerCount` and `autoLocked`.
+  private lastProbeAt = 0;
+  private oomCountAtLastProbe = 0;
+  private static readonly PROBE_INTERVAL_MS = 30_000;
   private statusListeners = new Set<(s: MinerStatus) => void>();
   private currentTemplate: { block: Block } | null = null;
 
@@ -132,6 +164,55 @@ export class MinerController {
     }
   }
 
+  /** High-level "what does the user want?" API. Applies a coherent set of
+   *  mode + power-preset + bounds; internally calls setThrottle /
+   *  setWorkerCount with derived values so the existing low-level paths
+   *  are unchanged. The /mine view binds its mode-toggle + presets +
+   *  Advanced fields through this; manual-mode sliders still call the
+   *  raw setThrottle / setWorkerCount setters. */
+  setControlMode(opts: {
+    mode?: ControlMode;
+    powerLevel?: PowerLevel;
+    autoMin?: number;
+    autoMax?: number;
+  }): void {
+    const max = maxMinerWorkers();
+    if (opts.mode !== undefined) {
+      if (opts.mode !== this.status.mode) {
+        this.status.mode = opts.mode;
+        this.status.autoLocked = false; // fresh start on mode change
+        this.lastProbeAt = 0; // probe again soon after mode change
+      }
+    }
+    if (opts.powerLevel !== undefined) {
+      this.status.powerLevel = opts.powerLevel;
+      if (this.status.mode === 'auto') {
+        this.setThrottle(powerThrottle(opts.powerLevel));
+      }
+    }
+    if (opts.autoMin !== undefined) {
+      this.status.autoMinThreads = Math.max(1, Math.min(max, Math.floor(opts.autoMin)));
+    }
+    if (opts.autoMax !== undefined) {
+      this.status.autoMaxThreads = Math.max(1, Math.min(max, Math.floor(opts.autoMax)));
+    }
+    // Keep min<=max sane.
+    if (this.status.autoMinThreads > this.status.autoMaxThreads) {
+      this.status.autoMinThreads = this.status.autoMaxThreads;
+    }
+    // If we just landed in auto mode and the current thread count is outside
+    // the bounds, snap it in. Use the lower bound — the tuner will probe up
+    // from there if there's room.
+    if (this.status.mode === 'auto') {
+      if (this.status.workerCount < this.status.autoMinThreads) {
+        this.setWorkerCount(this.status.autoMinThreads);
+      } else if (this.status.workerCount > this.status.autoMaxThreads) {
+        this.setWorkerCount(this.status.autoMaxThreads);
+      }
+    }
+    this.emit();
+  }
+
   start(): void {
     if (this.status.running) return;
     const reason = this.canStart?.();
@@ -146,6 +227,17 @@ export class MinerController {
     this.status.attemptCount = 0;
     this.status.attemptStartedAt = null;
     this.status.oomCount = 0;
+    this.status.autoLocked = false;
+    this.lastProbeAt = 0;
+    this.oomCountAtLastProbe = 0;
+    // In auto mode, snap workerCount to the lower bound on start — the tuner
+    // will probe up from there.
+    if (this.status.mode === 'auto' && this.status.workerCount > this.status.autoMaxThreads) {
+      this.status.workerCount = this.status.autoMaxThreads;
+    }
+    if (this.status.mode === 'auto' && this.status.workerCount < this.status.autoMinThreads) {
+      this.status.workerCount = this.status.autoMinThreads;
+    }
     this.spawnWorkers();
     this.restartTemplate();
     this.startHealthTimer();
@@ -247,8 +339,51 @@ export class MinerController {
           this.respawnWorker(i);
         }
       }
+      // 3. Auto-tune thread count in auto mode — back off on OOM, probe up
+      //    when there's headroom.
+      this.autoTune(now);
       this.emit();
     }, 1000);
+  }
+
+  /** Auto-mode threads tuner. Runs once per probe interval (~30s) when the
+   *  health timer fires and mode is 'auto'. Conservative hill-climber: any
+   *  new OOM since the last probe drops us by one and pins the count
+   *  (`autoLocked`); zero OOMs probes upward by one, capped by autoMax. */
+  private autoTune(now: number): void {
+    if (this.status.mode !== 'auto') return;
+    if (this.lastProbeAt === 0) {
+      // Warm-up: capture the baseline counters but don't probe yet.
+      this.lastProbeAt = now;
+      this.oomCountAtLastProbe = this.status.oomCount;
+      return;
+    }
+    if (now - this.lastProbeAt < MinerController.PROBE_INTERVAL_MS) return;
+
+    const oomDelta = this.status.oomCount - this.oomCountAtLastProbe;
+    this.lastProbeAt = now;
+    this.oomCountAtLastProbe = this.status.oomCount;
+
+    if (oomDelta > 0) {
+      const next = Math.max(this.status.autoMinThreads, this.status.workerCount - 1);
+      if (next !== this.status.workerCount) {
+        console.log(`[miner] auto-tune: ${oomDelta} OOM(s) — dropping threads ${this.status.workerCount} → ${next}, locking`);
+        this.status.autoLocked = true;
+        this.setWorkerCount(next);
+      } else {
+        // Already at minimum and still OOMing; lock anyway and let the user
+        // know via diagnostics.
+        this.status.autoLocked = true;
+      }
+      return;
+    }
+    if (this.status.autoLocked) return;
+    if (this.status.workerCount < this.status.autoMaxThreads) {
+      const next = this.status.workerCount + 1;
+      console.log(`[miner] auto-tune: no OOM, probing up ${this.status.workerCount} → ${next}`);
+      this.setWorkerCount(next);
+    }
+    // Else: at max and happy — hold.
   }
 
   private stopHealthTimer(): void {

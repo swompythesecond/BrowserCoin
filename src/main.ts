@@ -36,17 +36,31 @@ const node = new Node();
 void node.start();
 
 // Apply persisted miner settings up-front so auto-resume fires with the
-// user's last CPU/threads even if the active route isn't /mine or /home
+// user's last config even if the active route isn't /mine or /home
 // (those views also apply them on mount — this is the no-view-mounted path).
 {
   const max = maxMinerWorkers();
-  const rawThreads = Number(localStorage.getItem('browsercoin:miner-threads')) || 1;
+  // New mode-aware settings, with sensible defaults for first-time users.
+  const mode = (localStorage.getItem('browsercoin:miner-mode') === 'manual') ? 'manual' : 'auto';
+  const powerRaw = localStorage.getItem('browsercoin:miner-power');
+  const power = (powerRaw === 'low' || powerRaw === 'medium' || powerRaw === 'high') ? powerRaw : 'medium';
+  const defaultAutoMax = Math.max(2, Math.floor(max / 2));
+  const rawAutoMin = Number(localStorage.getItem('browsercoin:miner-auto-min'));
+  const autoMin = Number.isFinite(rawAutoMin) && rawAutoMin >= 1 ? Math.min(max, Math.floor(rawAutoMin)) : 1;
+  const rawAutoMax = Number(localStorage.getItem('browsercoin:miner-auto-max'));
+  const autoMax = Number.isFinite(rawAutoMax) && rawAutoMax >= 1 ? Math.min(max, Math.floor(rawAutoMax)) : defaultAutoMax;
+
+  // Legacy keys: meaningful in manual mode (and also used as the initial
+  // workerCount/throttle when auto mode boots, before the tuner kicks in).
+  const rawThreads = Number(localStorage.getItem('browsercoin:miner-threads')) || autoMin;
   const threads = Math.max(1, Math.min(max, Math.floor(rawThreads)));
   const rawPctStr = localStorage.getItem('browsercoin:miner-throttle');
   const rawPct = rawPctStr === null ? 100 : Number(rawPctStr);
   const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : 100;
+
   node.miner.setWorkerCount(threads);
   node.miner.setThrottle(pct / 100);
+  node.miner.setControlMode({ mode, powerLevel: power, autoMin, autoMax });
 }
 
 // Persist whether mining is on. Saved state is consulted on next page load

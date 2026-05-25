@@ -1,4 +1,5 @@
-import { maxMinerWorkers } from '../miner/controller.js';
+import { maxMinerWorkers, powerThrottle } from '../miner/controller.js';
+import type { PowerLevel } from '../miner/controller.js';
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { nextDifficulty } from '../chain/consensus.js';
@@ -10,6 +11,10 @@ import { cardHeader } from './info.js';
 
 const THREADS_KEY = 'browsercoin:miner-threads';
 const THROTTLE_KEY = 'browsercoin:miner-throttle';
+const MODE_KEY = 'browsercoin:miner-mode';
+const POWER_KEY = 'browsercoin:miner-power';
+const AUTO_MIN_KEY = 'browsercoin:miner-auto-min';
+const AUTO_MAX_KEY = 'browsercoin:miner-auto-max';
 
 /**
  * Full miner view: big animated hashrate hero, live stat tiles, controls, and
@@ -78,10 +83,40 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     <div class="grid grid-2 mt-lg">
       <section class="card" data-mount="cpu">
         <div data-slot="header"></div>
-        <label>CPU power: <span data-w="pct">${savedThrottlePct}%</span></label>
-        <input type="range" min="0" max="100" value="${savedThrottlePct}" class="slider" data-w="slider" />
-        <label class="mt-md">Threads: <span data-w="threads">${savedThreads}</span> <span class="muted">/ ${maxThreads} available</span></label>
-        <input type="range" min="1" max="${maxThreads}" value="${savedThreads}" step="1" class="slider" data-w="threadSlider" ${maxThreads === 1 ? 'disabled' : ''} />
+
+        <div class="row" style="gap:8px; margin-bottom:14px;">
+          <button class="ghost small" data-w="modeAuto">Auto</button>
+          <button class="ghost small" data-w="modeManual">Manual</button>
+        </div>
+
+        <div data-w="autoPane">
+          <label class="label-caps" style="margin-bottom:6px;">Power</label>
+          <div class="row" style="gap:6px; margin-bottom:14px;">
+            <button class="ghost small" data-w="powerLow">Low</button>
+            <button class="ghost small" data-w="powerMed">Medium</button>
+            <button class="ghost small" data-w="powerHigh">High</button>
+          </div>
+          <div class="text-sm muted" data-w="autoStatus">Threads (auto): —</div>
+          <details style="margin-top:12px;">
+            <summary class="text-sm muted" style="cursor:pointer;">Advanced — tuner bounds</summary>
+            <div class="row" style="gap:10px; align-items:center; margin-top:8px;">
+              <label class="text-sm" style="flex:1;">Min threads
+                <input type="number" min="1" max="${maxThreads}" value="1" class="mono" style="width:60px; margin-left:6px;" data-w="autoMin" />
+              </label>
+              <label class="text-sm" style="flex:1;">Max threads
+                <input type="number" min="1" max="${maxThreads}" value="${Math.max(2, Math.floor(maxThreads / 2))}" class="mono" style="width:60px; margin-left:6px;" data-w="autoMax" />
+              </label>
+            </div>
+            <p class="text-sm muted" style="margin:6px 0 0;">The tuner stays within these bounds. Defaults to half your cores — increase Max if you have plenty of RAM and want it to try harder.</p>
+          </details>
+        </div>
+
+        <div data-w="manualPane" hidden>
+          <label>CPU power: <span data-w="pct">${savedThrottlePct}%</span></label>
+          <input type="range" min="0" max="100" value="${savedThrottlePct}" class="slider" data-w="slider" />
+          <label class="mt-md">Threads: <span data-w="threads">${savedThreads}</span> <span class="muted">/ ${maxThreads} available</span></label>
+          <input type="range" min="1" max="${maxThreads}" value="${savedThreads}" step="1" class="slider" data-w="threadSlider" ${maxThreads === 1 ? 'disabled' : ''} />
+        </div>
       </section>
 
       <section class="card" data-mount="how">
@@ -184,6 +219,18 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const threadSlider = view.querySelector<HTMLInputElement>('[data-w="threadSlider"]')!;
   const threadsEl = view.querySelector<HTMLElement>('[data-w="threads"]')!;
 
+  // Mode + power UI refs.
+  const modeAutoBtn = view.querySelector<HTMLButtonElement>('[data-w="modeAuto"]')!;
+  const modeManualBtn = view.querySelector<HTMLButtonElement>('[data-w="modeManual"]')!;
+  const autoPane = view.querySelector<HTMLElement>('[data-w="autoPane"]')!;
+  const manualPane = view.querySelector<HTMLElement>('[data-w="manualPane"]')!;
+  const powerLowBtn = view.querySelector<HTMLButtonElement>('[data-w="powerLow"]')!;
+  const powerMedBtn = view.querySelector<HTMLButtonElement>('[data-w="powerMed"]')!;
+  const powerHighBtn = view.querySelector<HTMLButtonElement>('[data-w="powerHigh"]')!;
+  const autoStatusEl = view.querySelector<HTMLElement>('[data-w="autoStatus"]')!;
+  const autoMinInput = view.querySelector<HTMLInputElement>('[data-w="autoMin"]')!;
+  const autoMaxInput = view.querySelector<HTMLInputElement>('[data-w="autoMax"]')!;
+
   const diagIdle = view.querySelector<HTMLElement>('[data-w="diagIdle"]')!;
   const diagBody = view.querySelector<HTMLElement>('[data-w="diagBody"]')!;
   const diagBanner = view.querySelector<HTMLElement>('[data-w="diagBanner"]')!;
@@ -212,8 +259,66 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   let attemptHashesBaseline = 0;
   let lastAttemptStartedAt: number | null = null;
 
-  node.miner.setWorkerCount(savedThreads);
-  node.miner.setThrottle(savedThrottlePct / 100);
+  // Initial-state pickup from the controller (main.ts already restored
+  // persisted values into the controller before any view mounted).
+  {
+    const s0 = node.miner.getStatus();
+    autoMinInput.value = String(s0.autoMinThreads);
+    autoMaxInput.value = String(s0.autoMaxThreads);
+    applyModeToUI(s0.mode);
+    applyPowerToUI(s0.powerLevel);
+  }
+
+  // Selection state uses the .ghost modifier: unselected buttons get .ghost
+  // (muted), selected button drops it (full-strength brand colour).
+  function applyModeToUI(mode: 'auto' | 'manual'): void {
+    const isAuto = mode === 'auto';
+    autoPane.hidden = !isAuto;
+    manualPane.hidden = isAuto;
+    modeAutoBtn.classList.toggle('ghost', !isAuto);
+    modeManualBtn.classList.toggle('ghost', isAuto);
+  }
+  function applyPowerToUI(p: PowerLevel): void {
+    powerLowBtn.classList.toggle('ghost', p !== 'low');
+    powerMedBtn.classList.toggle('ghost', p !== 'medium');
+    powerHighBtn.classList.toggle('ghost', p !== 'high');
+  }
+
+  modeAutoBtn.addEventListener('click', () => {
+    localStorage.setItem(MODE_KEY, 'auto');
+    node.miner.setControlMode({ mode: 'auto' });
+    applyModeToUI('auto');
+  });
+  modeManualBtn.addEventListener('click', () => {
+    localStorage.setItem(MODE_KEY, 'manual');
+    node.miner.setControlMode({ mode: 'manual' });
+    // Manual mode honors whatever the legacy sliders were last set to.
+    node.miner.setThrottle(Number(slider.value) / 100);
+    node.miner.setWorkerCount(clampThreads(Number(threadSlider.value), maxThreads));
+    applyModeToUI('manual');
+  });
+
+  const setPower = (p: PowerLevel): void => {
+    localStorage.setItem(POWER_KEY, p);
+    node.miner.setControlMode({ powerLevel: p });
+    applyPowerToUI(p);
+  };
+  powerLowBtn.addEventListener('click', () => setPower('low'));
+  powerMedBtn.addEventListener('click', () => setPower('medium'));
+  powerHighBtn.addEventListener('click', () => setPower('high'));
+
+  autoMinInput.addEventListener('change', () => {
+    const v = clampThreads(Number(autoMinInput.value), maxThreads);
+    autoMinInput.value = String(v);
+    localStorage.setItem(AUTO_MIN_KEY, String(v));
+    node.miner.setControlMode({ autoMin: v });
+  });
+  autoMaxInput.addEventListener('change', () => {
+    const v = clampThreads(Number(autoMaxInput.value), maxThreads);
+    autoMaxInput.value = String(v);
+    localStorage.setItem(AUTO_MAX_KEY, String(v));
+    node.miner.setControlMode({ autoMax: v });
+  });
 
   toggleBtn.addEventListener('click', () => {
     const s = node.miner.getStatus();
@@ -452,6 +557,26 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     sessRewardEl.textContent = `${formatAmount(stats.reward)} ${TICKER}`;
     lifetimeEl.textContent = `lifetime: ${formatAmount(stats.lifetime)} ${TICKER}`;
     rewardEl.textContent = `${formatAmount(blockReward(nextHeight))} ${TICKER}`;
+
+    // Auto-pane status line.
+    if (s.mode === 'auto') {
+      const lockNote = s.autoLocked ? ' · locked (OOM)' : ' · probing';
+      autoStatusEl.textContent = s.running
+        ? `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}]${lockNote}`
+        : `Threads (auto): ${s.workerCount} of [${s.autoMinThreads}-${s.autoMaxThreads}] · idle`;
+    }
+    // Manual mode: reflect controller state into the sliders so e.g. an
+    // external setWorkerCount call (or initial mount) keeps them in sync.
+    if (s.mode === 'manual') {
+      if (document.activeElement !== slider) {
+        slider.value = String(Math.round(s.throttle * 100));
+        pctEl.textContent = `${Math.round(s.throttle * 100)}%`;
+      }
+      if (document.activeElement !== threadSlider) {
+        threadSlider.value = String(s.workerCount);
+        threadsEl.textContent = String(s.workerCount);
+      }
+    }
 
     refreshDiagnostics();
   }
