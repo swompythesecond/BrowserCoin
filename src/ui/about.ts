@@ -152,19 +152,22 @@ export function mountAbout(host: HTMLElement): () => void {
         keeps the network feeling responsive without breaking consensus.
       </p>
 
-      <h4>Why per-block difficulty retargeting</h4>
+      <h4>Why ASERT difficulty retargeting</h4>
       <p>
         Bitcoin retargets every 2,016 blocks (~2 weeks) because its hashrate
         is enormous and stable. A browser network's hashrate can swing 100×
-        when a few tabs open or close. BrowserCoin recalculates difficulty
-        every block over a 50-block sliding window. The retargeting uses
-        median-time-past on both ends of the window (a single lying timestamp
-        moves the median by less than 1/11 of the lie), asymmetric step caps
-        (target can shrink by /2 per block but grow by ×4  so attackers
-        can't briefly spike difficulty and leave honest miners stuck), and
-        an emergency drop if blocks stall for more than 6× the target time
-        (so the chain can recover from a sudden hashrate collapse without
-        stalling for hours).
+        when a few tabs open or close, so BrowserCoin retargets every block.
+        The algorithm is ASERT — the same anchor-based exponential rule
+        Bitcoin Cash adopted in 2020 — with target = anchor_target × 2^((Δt
+        − n × T) / halflife). Equilibrium is a mathematical fixed point at
+        any hashrate scale, so the chain converges smoothly whether one tab
+        is mining or thousands are. The half-life is 10 minutes (4 target
+        block-times), tuned to track minute-scale hashrate swings without
+        reacting to single-block noise. A hard floor at the genesis
+        difficulty keeps the chain alive even at near-zero hashrate, and a
+        two-interval emergency-drop rule (both the candidate's and the
+        parent's intervals must exceed 6× target before it fires) catches
+        the edge cases without giving a single miner a discount.
       </p>
 
       <h4>Why Ed25519 signatures</h4>

@@ -5,7 +5,7 @@
 - 🌐 **Live demo:** [browsercoin.org](https://browsercoin.org)
 - 💻 **Source:** [github.com/swompythesecond/BrowserCoin](https://github.com/swompythesecond/BrowserCoin)
 
-> **Status:** v0.2 — full end-to-end implementation with a fresh UI. Memory-hard Argon2id PoW, MTP-derived asymmetric difficulty retargeting, no centralized checkpoints.
+> **Status:** v0.2 — full end-to-end implementation with a fresh UI. Memory-hard Argon2id PoW, ASERT difficulty retargeting, no centralized checkpoints.
 
 ---
 
@@ -20,13 +20,13 @@ The chain rules are deliberately Bitcoin-shaped (fixed max supply, halving rewar
 | Parameter | BrowserCoin | Bitcoin |
 |---|---|---|
 | Target block time | **2.5 min** (150 s) | 10 min |
-| Difficulty retarget | **every block** over a 50-block window, MTP-derived, asymmetric clamp (≤2× up, ≤4× down per block) + emergency drop | every 2 016 blocks |
+| Difficulty retarget | **every block** via ASERT (anchor-based exponential, 10-min half-life) + floor + two-interval emergency drop | every 2 016 blocks |
 | Initial block reward | **50 BRC** | 50 BTC |
 | Halving interval | every **210 000 blocks** (~1 yr) | 210 000 blocks (~4 yr) |
 | Max supply | **21 000 000 BRC** | 21 000 000 BTC |
 | Smallest unit | 10⁻⁸ BRC | 10⁻⁸ BTC |
 
-Per-block retargeting over a 50-block sliding window is what lets the chain self-calibrate to the very volatile aggregate hashrate of "however many browser tabs are open right now." The retarget uses median-time-past on both ends of the window (kills single-timestamp lies), an asymmetric step cap (≤2× harder, ≤4× easier per block — so attackers can't pin difficulty high after they leave), and an emergency-drop rule that halves difficulty if a block goes >6× target without being found (so the chain can't stall when a large miner suddenly disappears).
+Per-block ASERT retargeting is what lets the chain self-calibrate to the very volatile aggregate hashrate of "however many browser tabs are open right now." ASERT (Absolutely Scheduled Exponentially Rising Targets, the algorithm Bitcoin Cash adopted in 2020) computes each block's target as `anchor_target × 2^((Δt − n × T) / halflife)` — equilibrium is a provable fixed point at any hashrate, with no window-based clustering pathology. A 10-minute half-life (4 target block-times) tracks minute-scale swings without jitter on single-block noise. A floor at the genesis difficulty keeps the chain alive at near-zero hashrate, and a two-interval emergency-drop rule (both candidate and parent intervals must exceed 6× target before it fires) gates the safety net against single-block manipulation.
 
 ## Features
 
@@ -105,9 +105,9 @@ Handled:
 - **Double-spend / replay** — account nonces + chain-id baked into the signed preimage
 - **Tx malleability** — Ed25519 deterministic signatures
 - **Spam** — per-byte min fee, mempool cap, signature verify before relay
-- **Timestamp warp** — median-time-past rule + 2 h future cap
+- **Timestamp warp** — median-time-past rule + 10 min future cap
 - **Block size attacks** — 256 KB cap
-- **Hashrate-gaming the difficulty algorithm** — MTP-derived intervals (single-timestamp lies move MTP by <1/11 of the lie), asymmetric step caps (attacker can't pin difficulty high after withdrawing hashrate), emergency drop (chain recovers from total hashrate collapse without stalling)
+- **Hashrate-gaming the difficulty algorithm** — ASERT exponential response is provably stable at any hashrate and has no window-based clustering pathology; single-block timestamp manipulation is bounded by the half-life / future-cap ratio (≤1 bit per malicious block, reverted by the next honest one); a difficulty floor blocks the "thin chain" cheap-reorg attack; a two-interval emergency drop catches long stalls without giving a lone attacker an on-demand discount
 
 ### On 51% — a deliberate design decision
 

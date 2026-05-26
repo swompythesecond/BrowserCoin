@@ -53,10 +53,11 @@ export const MTP_WINDOW = 11;
 export const HALFLIFE_S = 600;
 
 /**
- * Emergency drop: if the candidate block's timestamp is more than this many
- * target intervals past the parent's timestamp, the chain is presumed stalled
- * and the next block may use prev.difficulty / 2 without the normal window
- * calculation. Prevents indefinite stalls when a large miner suddenly leaves.
+ * Emergency drop: safety net for long stalls. Fires only when BOTH the
+ * candidate's gap from its parent AND the parent's gap from its grandparent
+ * exceed EMERGENCY_DROP_MULT × TARGET_BLOCK_TIME_S — see consensus.ts. The
+ * grandparent gate prevents a single attacker block from invoking the rule
+ * on demand for a discount. When fired, target doubles (clamped at floor).
  */
 export const EMERGENCY_DROP_MULT = 6;
 
