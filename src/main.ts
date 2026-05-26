@@ -175,15 +175,64 @@ const PHASE_TITLE: Record<string, string> = {
   offline:    "Can't reach the network",
 };
 const PHASE_SUB: Record<string, string> = {
-  restoring:  'Restoring local cache. This only takes a moment.',
-  connecting: 'Reaching out to the bootstrap server and looking for peers — your balance will load once we’re connected.',
-  fetching:   'Reaching out to the bootstrap server and looking for peers — your balance will load once we’re connected.',
-  verifying:  'Verifying blocks. This only happens on fresh tabs — reloads are instant.',
+  restoring:
+    'Replaying blocks you already verified, straight from local storage. Just a moment.',
+  connecting:
+    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is — your balance will load as soon as someone answers.',
+  fetching:
+    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is — your balance will load as soon as someone answers.',
+  verifying:
+    'Every browser is its own full node — no trusted central server. We re-check each block\'s proof-of-work locally before showing you any balance, so the chain is yours, not the server\'s word. This only happens once per fresh tab; reloads use the cached chain.',
   ready:      '',
-  offline:    'The bootstrap server is unreachable and no peers have answered. You can continue offline and try again later — balances will be from your last cached state.',
+  offline:
+    'The bootstrap server is unreachable and no peers have answered. You can continue offline and try again later — balances will be from your last cached state.',
 };
 
 overlayDismiss.addEventListener('click', () => node.dismissSyncOverlay());
+
+// ETA estimator. Tracks first observed (height, time) once verification is
+// actually progressing, then projects remaining time from the observed rate.
+// Cleared on phase change so the estimate resets between restoring and
+// verifying. Floors at ~5 blocks/sec so a momentary stall doesn't produce
+// a wildly pessimistic estimate.
+let etaStartHeight = -1;
+let etaStartMs = 0;
+let etaLastPhase = '';
+
+function estimateRemaining(localHeight: number, targetHeight: number, phase: string): string {
+  if (phase !== 'verifying' && phase !== 'fetching') {
+    etaStartHeight = -1;
+    etaLastPhase = phase;
+    return '';
+  }
+  if (phase !== etaLastPhase) {
+    etaStartHeight = localHeight;
+    etaStartMs = performance.now();
+    etaLastPhase = phase;
+    return '';
+  }
+  const remaining = Math.max(0, targetHeight - localHeight);
+  if (remaining === 0) return '';
+  const advanced = localHeight - etaStartHeight;
+  const elapsedMs = performance.now() - etaStartMs;
+  // Need a couple seconds of observed progress before guessing.
+  if (advanced < 5 || elapsedMs < 2000) {
+    // Fall back to a typical verifier throughput (~25 blocks/sec, 4-worker laptop).
+    const secs = Math.max(1, Math.round(remaining / 25));
+    return ` · ~${formatEtaSeconds(secs)} remaining`;
+  }
+  const rate = Math.max(5, advanced / (elapsedMs / 1000));
+  const secs = Math.max(1, Math.round(remaining / rate));
+  return ` · ~${formatEtaSeconds(secs)} remaining`;
+}
+
+function formatEtaSeconds(s: number): string {
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = (s / 3600).toFixed(1);
+  return `${h} h`;
+}
 
 function paintSync(): void {
   const s = node.getSyncStatus();
@@ -195,7 +244,8 @@ function paintSync(): void {
   const target = Math.max(s.targetHeight, s.localHeight, 1);
   const pct = target > 0 ? Math.min(100, Math.round((s.localHeight / target) * 100)) : 0;
   overlayBar.style.width = `${pct}%`;
-  overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '—'}`;
+  const eta = estimateRemaining(s.localHeight, s.targetHeight, s.phase);
+  overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '—'}${eta}`;
   overlayPhase.textContent = PHASE_LABEL[s.phase] ?? s.phase;
   overlayTitle.textContent = PHASE_TITLE[s.phase] ?? 'Connecting';
   overlaySub.textContent = PHASE_SUB[s.phase] ?? '';
@@ -203,6 +253,8 @@ function paintSync(): void {
 }
 
 node.onSync(paintSync);
+// Re-paint on a slow timer so the ETA updates between sync-status emits.
+setInterval(paintSync, 1000);
 paintSync();
 
 // ============ Offline auto-popup ============
