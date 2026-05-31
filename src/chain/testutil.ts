@@ -57,6 +57,14 @@ export async function buildBlock(
   for (let nonce = 0; nonce < 0x7fff_ffff; nonce++) {
     const h: BlockHeader = { ...baseHeader, nonce };
     if (await checkPoW(h)) return { header: h, transactions: txs };
+    // Argon2id (via powHash) is synchronous, and after warm-up loadArgon2id()
+    // resolves instantly — so `await checkPoW` only ever drains the microtask
+    // queue. A multi-block test would then block the event loop's poll phase
+    // for minutes straight, starving vitest's worker IPC heartbeat until birpc
+    // trips its 60s "Timeout calling onTaskUpdate" error. Yield a real macrotask
+    // every few attempts so the heartbeat gets serviced; the cost is negligible
+    // next to a ~40–125ms hash.
+    if ((nonce & 0x7) === 0) await new Promise((r) => setTimeout(r, 0));
   }
   throw new Error('test buildBlock failed to find PoW');
 }
