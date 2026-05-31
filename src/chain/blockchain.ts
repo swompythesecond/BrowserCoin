@@ -46,6 +46,10 @@ export interface ChainBlock {
 export interface ReorgDelta {
   confirmed: Transaction[];
   restored: Transaction[];
+  /** Blocks now on the canonical chain (the new branch above the common ancestor). */
+  connected: ChainBlock[];
+  /** Blocks displaced off the canonical chain by a reorg (the old branch). */
+  disconnected: ChainBlock[];
 }
 
 export type ValidationError = string;
@@ -242,8 +246,8 @@ export class Blockchain {
    * (return to mempool); txs on the new branch are `confirmed` (leave mempool).
    */
   private reorgDelta(oldTipHex: string, newTipHex: string): ReorgDelta {
-    const oldBlocks: Block[] = [];
-    const newBlocks: Block[] = [];
+    const oldBlocks: ChainBlock[] = [];
+    const newBlocks: ChainBlock[] = [];
     let aHex: string = oldTipHex;
     let bHex: string = newTipHex;
     let a = this.blocks.get(aHex);
@@ -251,19 +255,19 @@ export class Blockchain {
 
     // Bring the deeper branch up until both cursors sit at the same height.
     while (a && b && a.block.header.height > b.block.header.height) {
-      oldBlocks.push(a.block);
+      oldBlocks.push(a);
       aHex = bytesToHex(a.block.header.prevHash);
       a = this.blocks.get(aHex);
     }
     while (a && b && b.block.header.height > a.block.header.height) {
-      newBlocks.push(b.block);
+      newBlocks.push(b);
       bHex = bytesToHex(b.block.header.prevHash);
       b = this.blocks.get(bHex);
     }
     // Same height now — step both back together until they converge.
     while (a && b && aHex !== bHex) {
-      oldBlocks.push(a.block);
-      newBlocks.push(b.block);
+      oldBlocks.push(a);
+      newBlocks.push(b);
       aHex = bytesToHex(a.block.header.prevHash);
       bHex = bytesToHex(b.block.header.prevHash);
       a = this.blocks.get(aHex);
@@ -271,10 +275,10 @@ export class Blockchain {
     }
 
     const restored: Transaction[] = [];
-    for (const blk of oldBlocks) for (const tx of blk.transactions) restored.push(tx);
+    for (const cb of oldBlocks) for (const tx of cb.block.transactions) restored.push(tx);
     const confirmed: Transaction[] = [];
-    for (const blk of newBlocks) for (const tx of blk.transactions) confirmed.push(tx);
-    return { confirmed, restored };
+    for (const cb of newBlocks) for (const tx of cb.block.transactions) confirmed.push(tx);
+    return { confirmed, restored, connected: newBlocks, disconnected: oldBlocks };
   }
 
   /**

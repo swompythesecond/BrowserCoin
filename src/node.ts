@@ -11,6 +11,7 @@ import { getAccount } from './chain/state.js';
 import { blockReward, COIN } from './chain/genesis.js';
 import { decodeBlock, encodeBlock, type Block } from './chain/block.js';
 import { bytesToHex } from './util/binary.js';
+import { ActivityIndex } from './ui/activityIndex.js';
 import {
   clearAll,
   getAllBlocksOrdered,
@@ -74,6 +75,12 @@ export class Node {
   readonly chain = new Blockchain();
   readonly mempool = new Mempool();
   wallet: KeyPair;
+  /**
+   * Incremental index of the wallet's confirmed + mined activity, fed by
+   * canonical-tip moves so the UI never rescans the chain. Built during IDB
+   * replay for free (we visit every tx to rebuild tip state anyway).
+   */
+  readonly activityIndex: ActivityIndex;
   readonly miner: MinerController;
   network: PeerNetwork | null = null;
   serverSync: ServerSync | null = null;
@@ -93,6 +100,7 @@ export class Node {
 
   constructor() {
     this.wallet = loadOrCreateWallet();
+    this.activityIndex = new ActivityIndex(this.wallet.address);
     this.serverLists = loadServerLists();
 
     // Persist every accepted block to IDB so the next page load can fast-restore.
@@ -108,9 +116,12 @@ export class Node {
     // leaves the mempool when it confirms on the canonical chain, and txs
     // displaced by a reorg are put back so they can be re-mined. Restored txs
     // are re-validated against the new tip state by `add` (rejections ignored).
-    this.chain.onTipChanged(({ confirmed, restored }) => {
-      for (const tx of restored) this.mempool.add(tx, this.chain.tipState);
-      this.mempool.removeMany(confirmed);
+    this.chain.onTipChanged((delta) => {
+      // Keep the activity index in lock-step with the canonical tip: add rows
+      // for connected blocks, drop them for reorg-displaced ones.
+      this.activityIndex.apply(delta);
+      for (const tx of delta.restored) this.mempool.add(tx, this.chain.tipState);
+      this.mempool.removeMany(delta.confirmed);
       this.miner.refresh();
       this.emitChain();
     });
@@ -385,6 +396,9 @@ export class Node {
     this.wallet = kp;
     saveWallet(kp);
     this.miner.setMinerAddress(kp.publicKey);
+    // The activity index is address-specific — rebuild it for the new wallet
+    // (one canonical pass over blocks already in memory).
+    this.activityIndex.rebuild(kp.address, this.chain.iterateCanonical());
     this.emitWallet();
     this.emitChain();
   }

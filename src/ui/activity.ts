@@ -1,31 +1,20 @@
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { bytesToHex } from '../util/binary.js';
-import { blockReward } from '../chain/genesis.js';
 import { TICKER } from '../brand.js';
+import { short, timeAgo, type ActivityRow } from './activityIndex.js';
 
-export interface ActivityRow {
-  status: 'pending' | 'confirmed' | 'mined';
-  dir: 'sent' | 'received' | 'mined';
-  counterparty: string; // short hex, or 'block #N' for mined rows
-  amount: bigint;       // positive = inflow, negative = outflow (incl. fee)
-  fee: bigint;
-  when: string;
-  sortKey: number;      // higher = newer
-}
+export { short, timeAgo, blockTime, type ActivityRow } from './activityIndex.js';
 
 export type ActivityFilter = 'all' | 'sent' | 'received' | 'mined' | 'pending';
 
 /**
- * Compute the user's activity (pending mempool + canonical chain history). Caps
- * canonical scan at `maxScan` blocks so the wallet page stays snappy on long
- * chains. `maxRows` lets a caller stop early once it has enough chain rows: the
- * scan is newest-first, so the first N matching rows are the newest N. The home
- * preview uses this to stay fast without capping scan depth — capping depth made
- * the preview miss activity older than its window that the full wallet still
- * showed.
+ * Compute the user's activity: live pending (mempool) rows merged with the
+ * confirmed + mined rows from `node.activityIndex`. The index is maintained
+ * incrementally as the canonical tip moves, so this no longer rescans the chain
+ * and is no longer capped to a recent window — it returns the full history.
  */
-export function computeActivity(node: Node, maxScan = 1000, maxRows = Infinity): ActivityRow[] {
+export function computeActivity(node: Node): ActivityRow[] {
   const myAddr = node.wallet.address;
   const rows: ActivityRow[] = [];
 
@@ -45,50 +34,7 @@ export function computeActivity(node: Node, maxScan = 1000, maxRows = Infinity):
     });
   }
 
-  let scanned = 0;
-  let chainRows = 0;
-  for (const cb of node.chain.iterateCanonical()) {
-    if (scanned++ > maxScan) break;
-    const h = cb.block.header;
-    if (h.height === 0) break;
-    const minerHex = bytesToHex(h.miner);
-    const sortBase = h.timestamp * 1000;
-
-    if (minerHex === myAddr) {
-      let totalFees = 0n;
-      for (const tx of cb.block.transactions) totalFees += tx.fee;
-      rows.push({
-        status: 'mined',
-        dir: 'mined',
-        counterparty: `block #${h.height}`,
-        amount: blockReward(h.height) + totalFees,
-        fee: 0n,
-        when: blockTime(h.timestamp),
-        sortKey: sortBase,
-      });
-      chainRows++;
-    }
-
-    for (const tx of cb.block.transactions) {
-      const fromHex = bytesToHex(tx.from);
-      const toHex = bytesToHex(tx.to);
-      if (fromHex !== myAddr && toHex !== myAddr) continue;
-      const sent = fromHex === myAddr;
-      rows.push({
-        status: 'confirmed',
-        dir: sent ? 'sent' : 'received',
-        counterparty: short(sent ? toHex : fromHex),
-        amount: sent ? -(tx.amount + tx.fee) : tx.amount,
-        fee: sent ? tx.fee : 0n,
-        when: `block #${h.height}`,
-        sortKey: sortBase,
-      });
-      chainRows++;
-    }
-
-    // Newest-first scan: once we have enough chain rows, the rest are older.
-    if (chainRows >= maxRows) break;
-  }
+  rows.push(...node.activityIndex.rows());
 
   rows.sort((a, b) => b.sortKey - a.sortKey);
   return rows;
@@ -120,23 +66,4 @@ export function renderActivityRows(rows: ActivityRow[]): string {
       </tr>`;
     })
     .join('');
-}
-
-export function short(hex: string): string {
-  return hex.slice(0, 10) + '…' + hex.slice(-4);
-}
-
-export function timeAgo(ms: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
-}
-
-export function blockTime(unixSeconds: number): string {
-  const s = Math.max(0, Math.floor(Date.now() / 1000 - unixSeconds));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return new Date(unixSeconds * 1000).toLocaleDateString();
 }

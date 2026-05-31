@@ -187,7 +187,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
       c.classList.toggle('active', c.dataset['filter'] === activeFilter);
     }
 
-    const all = computeActivity(node, 2000);
+    const all = computeActivity(node);
     const filtered = filterActivity(all, activeFilter);
     const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
     if (page >= pages) page = pages - 1;
