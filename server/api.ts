@@ -82,8 +82,26 @@ const cheapLimiter = rateLimit({
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAIN_FILE = path.join(__dirname, `chain-${PORT}.json`);
 
+// Tiered chain checkpoints (grandfather-father-son rotation). The server keeps
+// only one live chain file; these backups are point-in-time copies we can
+// restore from. They are thinned as they age: twice-daily for the first week,
+// then weekly out to 4 weeks, then monthly forever.
+const BACKUP_DIR = path.join(__dirname, `backups-${PORT}`);
+const BACKUP_INTERVAL_MS = 12 * 60 * 60 * 1000; // twice a day
+const BACKUP_CHECK_MS = 1 * 60 * 60 * 1000; // re-evaluate hourly (survives restarts)
+const TIER_DENSE_MS = 7 * 24 * 60 * 60 * 1000; // < 7d:    keep every backup (twice-daily)
+const TIER_WEEKLY_MS = 28 * 24 * 60 * 60 * 1000; // 7-28d:   keep one per week
+// >= 28d: keep one per calendar month, indefinitely
+
 const chain = new Blockchain();
 const mempool = new Mempool();
+// Mempool eviction hangs off canonical-tip moves only — a tx must not be
+// dropped just because it appeared in some accepted-but-non-canonical fork
+// block. Reorg-displaced txs are returned to the pool to be re-mined.
+chain.onTipChanged(({ confirmed, restored }) => {
+  for (const tx of restored) mempool.add(tx, chain.tipState);
+  mempool.removeMany(confirmed);
+});
 /** Orphan blocks (parent unknown) keyed by their parent hash hex. */
 const orphans = new Map<string, Block>();
 const MAX_ORPHANS = 2048;
@@ -122,13 +140,18 @@ async function loadChainFromDisk(): Promise<void> {
   }
 }
 
-async function saveChainToDiskNow(): Promise<void> {
+/** Serialize the canonical chain (excluding genesis) to the on-disk JSON shape. */
+function serializeChain(): string {
   const blocks: string[] = [];
   for (const cb of chain.iterateCanonical()) {
     if (cb.block.header.height > 0) blocks.unshift(bytesToHex(encodeBlock(cb.block)));
   }
+  return JSON.stringify({ version: 1, chainVersion: CHAIN_VERSION, blocks });
+}
+
+async function saveChainToDiskNow(): Promise<void> {
   const tmp = CHAIN_FILE + '.tmp';
-  await fs.writeFile(tmp, JSON.stringify({ version: 1, chainVersion: CHAIN_VERSION, blocks }));
+  await fs.writeFile(tmp, serializeChain());
   await fs.rename(tmp, CHAIN_FILE);
 }
 
@@ -158,6 +181,136 @@ async function saveChainToDisk(): Promise<void> {
   }
 }
 
+// ─── Tiered chain checkpoints ────────────────────────────────────────────────
+
+const BACKUP_PREFIX = `chain-${PORT}-`;
+
+/** UTC, colon-free (Windows-safe) timestamp for a backup filename: YYYY-MM-DD_HHmmZ. */
+function backupStamp(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}` +
+    `_${p(d.getUTCHours())}${p(d.getUTCMinutes())}Z`
+  );
+}
+
+/** Parse the UTC timestamp back out of a backup filename. Returns null if unparseable. */
+function parseBackupStamp(name: string): number | null {
+  const m = name.match(/-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})Z\.json$/);
+  if (!m) return null;
+  const [, y, mo, da, h, mi] = m;
+  const t = Date.UTC(+y, +mo - 1, +da, +h, +mi);
+  return Number.isNaN(t) ? null : t;
+}
+
+interface BackupEntry {
+  name: string;
+  time: number; // ms epoch, from filename (preferred) or mtime (fallback)
+}
+
+/** List existing backups with their effective timestamps, newest first. */
+async function listBackups(): Promise<BackupEntry[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(BACKUP_DIR);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
+  }
+  const entries: BackupEntry[] = [];
+  for (const name of names) {
+    if (!name.startsWith(BACKUP_PREFIX) || !name.endsWith('.json')) continue;
+    let time = parseBackupStamp(name);
+    if (time === null) {
+      try {
+        time = (await fs.stat(path.join(BACKUP_DIR, name))).mtimeMs;
+      } catch {
+        continue;
+      }
+    }
+    entries.push({ name, time });
+  }
+  entries.sort((a, b) => b.time - a.time);
+  return entries;
+}
+
+/** Write a checkpoint of the current in-memory chain to the backup dir. */
+async function writeBackupNow(): Promise<void> {
+  await fs.mkdir(BACKUP_DIR, { recursive: true });
+  const name = `${BACKUP_PREFIX}${backupStamp(new Date())}.json`;
+  const dest = path.join(BACKUP_DIR, name);
+  const tmp = dest + '.tmp';
+  await fs.writeFile(tmp, serializeChain());
+  await fs.rename(tmp, dest);
+  console.log(`[backup] wrote ${name} (height=${chain.height})`);
+}
+
+/**
+ * Thin aged backups per the retention tiers. Keeps every backup younger than
+ * TIER_DENSE_MS, one per ISO-week between TIER_DENSE_MS and TIER_WEEKLY_MS, and
+ * one per calendar month beyond that (kept indefinitely). Within each week/month
+ * bucket the newest backup is kept; the rest are deleted.
+ */
+async function pruneBackups(): Promise<void> {
+  const entries = await listBackups(); // newest first
+  const now = Date.now();
+  const seen = new Set<string>(); // bucket keys already claimed by a kept backup
+  const toDelete: string[] = [];
+
+  for (const e of entries) {
+    const age = now - e.time;
+    if (age < TIER_DENSE_MS) continue; // dense tier: keep all
+
+    const d = new Date(e.time);
+    let bucket: string;
+    if (age < TIER_WEEKLY_MS) {
+      bucket = `w:${isoYearWeek(d)}`;
+    } else {
+      bucket = `m:${d.getUTCFullYear()}-${d.getUTCMonth() + 1}`;
+    }
+    // entries are newest-first, so the first one we see in a bucket is the
+    // newest — keep it, drop any older sibling in the same bucket.
+    if (seen.has(bucket)) toDelete.push(e.name);
+    else seen.add(bucket);
+  }
+
+  for (const name of toDelete) {
+    await fs.rm(path.join(BACKUP_DIR, name), { force: true });
+  }
+  if (toDelete.length > 0) {
+    console.log(`[backup] pruned ${toDelete.length} aged checkpoint(s)`);
+  }
+}
+
+/** ISO-8601 year-week key (e.g. "2026-22") for weekly bucketing, in UTC. */
+function isoYearWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // Shift to the Thursday of this week, then count weeks from Jan 1.
+  const day = d.getUTCDay() || 7; // Mon=1..Sun=7
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = Date.UTC(d.getUTCFullYear(), 0, 1);
+  const week = Math.ceil(((d.getTime() - yearStart) / 86_400_000 + 1) / 7);
+  return `${d.getUTCFullYear()}-${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * Take a checkpoint if one is due, then prune. "Due" is derived from the newest
+ * existing backup's timestamp (not an in-memory tick) so the schedule survives
+ * restarts: no double-backup on restart, no skipped slot after brief downtime.
+ */
+async function backupTick(): Promise<void> {
+  try {
+    const entries = await listBackups();
+    const newest = entries[0]?.time ?? -Infinity;
+    if (Date.now() - newest >= BACKUP_INTERVAL_MS - 60_000) {
+      await writeBackupNow();
+    }
+    await pruneBackups();
+  } catch (e) {
+    console.warn('[backup] tick failed:', (e as Error).message);
+  }
+}
+
 /** Try to add `b`. If parent unknown, park as orphan. After success, drain. */
 async function tryAdmitBlock(b: Block): Promise<{ status: 'added' | 'orphan' | 'invalid'; parentNeeded?: string; error?: string }> {
   const ownHashHex = bytesToHex(hashHeader(b.header));
@@ -165,7 +318,7 @@ async function tryAdmitBlock(b: Block): Promise<{ status: 'added' | 'orphan' | '
 
   const err = await chain.addBlock(b);
   if (err === null) {
-    mempool.removeMany(b.transactions);
+    // Mempool reconciliation happens in the onTipChanged handler.
     await drainOrphans(ownHashHex);
     return { status: 'added' };
   }
@@ -189,7 +342,7 @@ async function drainOrphans(addedHashHex: string): Promise<void> {
     orphans.delete(cursor);
     const err = await chain.addBlock(waiting);
     if (err !== null) return;
-    mempool.removeMany(waiting.transactions);
+    // Mempool reconciliation happens in the onTipChanged handler.
     cursor = bytesToHex(hashHeader(waiting.header));
   }
 }
@@ -373,10 +526,17 @@ app.get('/', cheapLimiter, (_req, res) => {
 
 async function main(): Promise<void> {
   await loadChainFromDisk();
+  // Checkpoint scheduler: only starts after the chain is loaded so the first
+  // backup reflects real state. backupTick decides "due" from existing files.
+  await backupTick();
+  setInterval(() => {
+    void backupTick();
+  }, BACKUP_CHECK_MS);
   server.listen(PORT, () => {
     console.log(`BrowserCoin API helper listening on :${PORT}`);
     console.log(`  Chain file:  ${path.basename(CHAIN_FILE)}`);
     console.log(`  Chain tip:   height=${chain.height}`);
+    console.log(`  Backups:     ${path.basename(BACKUP_DIR)}/ (12h, tiered retention)`);
     console.log(`  Stats:       http://localhost:${PORT}/stats`);
   });
 }

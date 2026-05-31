@@ -104,6 +104,17 @@ export class Node {
         .catch((e) => console.warn('[node] idb persist failed:', (e as Error).message));
     });
 
+    // Single source of truth for mempool ↔ chain reconciliation: a tx only
+    // leaves the mempool when it confirms on the canonical chain, and txs
+    // displaced by a reorg are put back so they can be re-mined. Restored txs
+    // are re-validated against the new tip state by `add` (rejections ignored).
+    this.chain.onTipChanged(({ confirmed, restored }) => {
+      for (const tx of restored) this.mempool.add(tx, this.chain.tipState);
+      this.mempool.removeMany(confirmed);
+      this.miner.refresh();
+      this.emitChain();
+    });
+
     this.miner = new MinerController(
       this.chain,
       this.mempool,
@@ -115,8 +126,8 @@ export class Node {
           this.miner.refresh();
           return;
         }
-        this.mempool.removeMany(block.transactions);
-        this.miner.refresh();
+        // Mempool eviction + miner re-template happen in the onTipChanged
+        // handler that addBlock just fired. We only need to propagate + notify.
         this.network?.broadcastBlock();
         this.serverSync?.kick();
         this.emitChain();
@@ -207,11 +218,17 @@ export class Node {
     // 2. Server sync. Reports its own status; we use the first /tip response
     //    to set syncStatus.targetHeight and decide when to lower the overlay.
     this.emitSync({ phase: 'fetching' });
-    this.serverSync = new ServerSync(this.chain, this.mempool, this.serverLists.api, () => {
-      this.miner.refresh();
-      this.emitChain();
-      this.updateSyncReadiness();
-    });
+    this.serverSync = new ServerSync(
+      this.chain,
+      this.mempool,
+      this.serverLists.api,
+      () => {
+        this.miner.refresh();
+        this.emitChain();
+        this.updateSyncReadiness();
+      },
+      () => this.miner.getStatus().running,
+    );
     this.serverSync.onStatus((s) => {
       if (s.reachable > 0 && s.serverHeight > this.syncStatus.targetHeight) {
         this.emitSync({ targetHeight: s.serverHeight });

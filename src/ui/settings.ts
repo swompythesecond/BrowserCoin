@@ -6,6 +6,7 @@ import { defaultServerLists, parseServerInput } from '../net/servers.js';
 import { clearAll } from '../storage/idb.js';
 import { encodeBlock } from '../chain/block.js';
 import { bytesToHex } from '../util/binary.js';
+import { VERIFY_CORES_KEY, maxVerifierCores, configuredVerifierCores } from '../chain/verifierPool.js';
 
 export function mountSettings(host: HTMLElement, node: Node): () => void {
   const view = document.createElement('div');
@@ -75,6 +76,21 @@ https://server2.example"></textarea>
         </div>
       </section>
 
+      <section class="card col-2" data-mount="verify">
+        <div data-slot="header"></div>
+        <details class="advanced">
+          <summary>Advanced</summary>
+          <p class="text-sm muted" style="margin:12px 0;">
+            Catching up on the chain re-checks the proof-of-work on every block. That hashing
+            is spread across CPU cores — more cores means faster initial sync, at the cost of
+            more memory and CPU while syncing. The default of 4 is a safe balance; raise it
+            toward your core count if you have headroom to spare.
+          </p>
+          <label style="margin:0;">Verification cores: <span data-w="vcores">4</span> <span class="muted">/ <span data-w="vmax">?</span> available</span></label>
+          <input type="range" min="1" max="1" value="1" step="1" class="slider" data-w="vslider" />
+        </details>
+      </section>
+
       <section class="card col-2" data-mount="devtools">
         <div data-slot="header"></div>
         <p class="text-sm muted" style="margin:0 0 12px;">
@@ -136,6 +152,13 @@ https://server2.example"></textarea>
     info: {
       title: 'Helper servers',
       body: `BrowserCoin is end-to-end peer-to-peer — the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper — the URLs are public.`,
+    },
+  }));
+  view.querySelector<HTMLElement>('[data-mount="verify"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Chain verification',
+    info: {
+      title: 'Verification cores',
+      body: `When this tab catches up on the chain, it re-verifies the Argon2id proof-of-work on every block — that's the slow part of syncing. The work is fanned out across this many Web Workers, one per CPU core.\n\nMore cores = faster initial sync, but each worker holds ~32 MB while hashing, so a high setting briefly uses more memory. The default of 4 keeps a fresh tab light; if your machine has cores to spare, raise it toward the maximum. Changes apply immediately and are remembered for next time.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="devtools"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -308,6 +331,24 @@ https://server2.example"></textarea>
     } finally {
       exportChainBtn.disabled = false;
     }
+  });
+
+  // --- Verification cores (advanced) ------------------------------------
+  const vSlider = view.querySelector<HTMLInputElement>('[data-w="vslider"]')!;
+  const vCoresEl = view.querySelector<HTMLElement>('[data-w="vcores"]')!;
+  const vMaxEl = view.querySelector<HTMLElement>('[data-w="vmax"]')!;
+  const maxV = maxVerifierCores();
+  const savedV = configuredVerifierCores();
+  vMaxEl.textContent = String(maxV);
+  vSlider.max = String(maxV);
+  vSlider.value = String(savedV);
+  vCoresEl.textContent = String(savedV);
+  if (maxV === 1) vSlider.disabled = true;
+  vSlider.addEventListener('input', () => {
+    const n = Math.max(1, Math.min(maxV, Math.floor(Number(vSlider.value)) || 1));
+    vCoresEl.textContent = String(n);
+    localStorage.setItem(VERIFY_CORES_KEY, String(n));
+    node.serverSync?.setVerifierConcurrency(n);
   });
 
   const clearCacheBtn = view.querySelector<HTMLButtonElement>('[data-w="clear-cache"]')!;

@@ -19,9 +19,13 @@ export type ActivityFilter = 'all' | 'sent' | 'received' | 'mined' | 'pending';
 /**
  * Compute the user's activity (pending mempool + canonical chain history). Caps
  * canonical scan at `maxScan` blocks so the wallet page stays snappy on long
- * chains; for the home preview pass a small limit.
+ * chains. `maxRows` lets a caller stop early once it has enough chain rows: the
+ * scan is newest-first, so the first N matching rows are the newest N. The home
+ * preview uses this to stay fast without capping scan depth — capping depth made
+ * the preview miss activity older than its window that the full wallet still
+ * showed.
  */
-export function computeActivity(node: Node, maxScan = 1000): ActivityRow[] {
+export function computeActivity(node: Node, maxScan = 1000, maxRows = Infinity): ActivityRow[] {
   const myAddr = node.wallet.address;
   const rows: ActivityRow[] = [];
 
@@ -42,6 +46,7 @@ export function computeActivity(node: Node, maxScan = 1000): ActivityRow[] {
   }
 
   let scanned = 0;
+  let chainRows = 0;
   for (const cb of node.chain.iterateCanonical()) {
     if (scanned++ > maxScan) break;
     const h = cb.block.header;
@@ -61,6 +66,7 @@ export function computeActivity(node: Node, maxScan = 1000): ActivityRow[] {
         when: blockTime(h.timestamp),
         sortKey: sortBase,
       });
+      chainRows++;
     }
 
     for (const tx of cb.block.transactions) {
@@ -77,7 +83,11 @@ export function computeActivity(node: Node, maxScan = 1000): ActivityRow[] {
         when: `block #${h.height}`,
         sortKey: sortBase,
       });
+      chainRows++;
     }
+
+    // Newest-first scan: once we have enough chain rows, the rest are older.
+    if (chainRows >= maxRows) break;
   }
 
   rows.sort((a, b) => b.sortKey - a.sortKey);

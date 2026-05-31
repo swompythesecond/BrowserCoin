@@ -27,33 +27,66 @@ export class VerifierPool {
   private started = false;
 
   constructor(size: number) {
-    // Leave at least one core free for the main thread + UI. Mining workers
-    // are gated by the sync overlay, so they shouldn't be competing here.
-    this.size = Math.max(1, Math.min(8, size));
+    this.size = clampCores(size);
+  }
+
+  private spawnWorker(): Worker {
+    const w = new Worker(new URL('./verifier.worker.ts', import.meta.url), { type: 'module' });
+    w.onmessage = (e: MessageEvent<{ id: number; ok: boolean }>) => {
+      const p = this.pending.get(e.data.id);
+      if (p) {
+        this.pending.delete(e.data.id);
+        p.resolve(e.data.ok);
+      }
+      this.releaseWorker(w);
+    };
+    this.workers.push(w);
+    return w;
   }
 
   private ensureStarted(): void {
     if (this.started) return;
     this.started = true;
     for (let i = 0; i < this.size; i++) {
-      const w = new Worker(new URL('./verifier.worker.ts', import.meta.url), { type: 'module' });
-      w.onmessage = (e: MessageEvent<{ id: number; ok: boolean }>) => {
-        const p = this.pending.get(e.data.id);
-        if (p) {
-          this.pending.delete(e.data.id);
-          p.resolve(e.data.ok);
-        }
-        this.releaseWorker(w);
-      };
-      this.workers.push(w);
-      this.idle.push(w);
+      this.idle.push(this.spawnWorker());
     }
+  }
+
+  /**
+   * Change how many cores this pool uses, applied live. Growing spawns workers
+   * immediately; shrinking retires idle workers now and busy ones as they
+   * finish, so an in-flight batch never loses results. Safe to call before the
+   * pool has started — it just records the new size for the first dispatch.
+   */
+  setSize(size: number): void {
+    this.size = clampCores(size);
+    if (!this.started) return;
+    // Grow: spin up new workers and let them pick up queued work (or idle).
+    while (this.workers.length < this.size) {
+      this.releaseWorker(this.spawnWorker());
+    }
+    // Shrink: drop idle workers now. Busy ones retire themselves on release.
+    while (this.workers.length > this.size && this.idle.length > 0) {
+      this.retire(this.idle.pop()!);
+    }
+  }
+
+  private retire(w: Worker): void {
+    w.terminate();
+    const wi = this.workers.indexOf(w);
+    if (wi >= 0) this.workers.splice(wi, 1);
+    const ii = this.idle.indexOf(w);
+    if (ii >= 0) this.idle.splice(ii, 1);
   }
 
   private releaseWorker(w: Worker): void {
     const next = this.queue.shift();
     if (next) {
       this.dispatch(w, next.block, next.resolve);
+    } else if (this.workers.length > this.size) {
+      // Pool was downsized while this worker was busy; retire it now that the
+      // queue is drained rather than parking it back in the idle set.
+      this.retire(w);
     } else {
       this.idle.push(w);
     }
@@ -97,9 +130,30 @@ export class VerifierPool {
   }
 }
 
-/** Default pool sized to the device. Cap at 4 to keep transient memory <128 MB. */
-export function defaultVerifierPoolSize(): number {
-  const cores =
-    (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
-  return Math.max(1, Math.min(4, cores - 1));
+/** localStorage key holding the user's chosen verifier core count. */
+export const VERIFY_CORES_KEY = 'browsercoin:verify-cores';
+
+/** Hardware thread count, with a safe fallback when it's unavailable. */
+export function maxVerifierCores(): number {
+  return (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+}
+
+/** Clamp a requested core count to a sane [1, hardware] range. */
+function clampCores(n: number): number {
+  const max = maxVerifierCores();
+  if (!Number.isFinite(n)) return Math.min(4, max);
+  return Math.max(1, Math.min(max, Math.floor(n)));
+}
+
+/**
+ * How many cores to verify with. Reads the user's persisted choice; first-time
+ * users default to 4 (or fewer on smaller machines). Each Argon2id worker holds
+ * ~32 MB while busy, so the default keeps a fresh tab well under ~128 MB while
+ * still parallelising bulk sync; power users can raise it up to all cores in
+ * Settings.
+ */
+export function configuredVerifierCores(): number {
+  const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(VERIFY_CORES_KEY) : null;
+  if (raw === null) return Math.min(4, maxVerifierCores());
+  return clampCores(Number(raw));
 }

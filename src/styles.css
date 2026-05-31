@@ -75,6 +75,7 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
   align-items: center;
   gap: 12px;
   user-select: none;
+  cursor: pointer;
 }
 .brand-mark {
   width: 48px;
@@ -441,6 +442,29 @@ label {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+/* ============ Advanced foldout ============ */
+
+.advanced > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: color var(--transition);
+}
+.advanced > summary:hover { color: var(--text); }
+.advanced > summary::-webkit-details-marker { display: none; }
+.advanced > summary::before {
+  content: '▸';
+  font-size: 0.8em;
+  transition: transform var(--transition);
+}
+.advanced[open] > summary::before { transform: rotate(90deg); }
 
 /* ============ Pagination ============ */
 
@@ -840,8 +864,8 @@ label {
 }
 
 @media (max-width: 600px) {
-  /* Drop low-priority columns to keep tables readable without horizontal scroll. */
-  .col-hide-sm { display: none !important; }
+  /* Keep every column visible on mobile; the .table-scroll wrapper lets users
+     swipe horizontally to reach the lower-priority columns instead of hiding them. */
   .table th, .table td { padding: 8px 8px; font-size: 0.78rem; }
   .card { padding: 14px; }
   .stat-tile { padding: 12px 14px; }
@@ -942,6 +966,23 @@ label {
   background: var(--accent-soft);
   color: var(--text);
   border-color: var(--accent);
+}
+.sync-advanced {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
+.sync-advanced > summary { justify-content: flex-start; }
+.sync-advanced-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 10px 0;
+}
+.sync-advanced-label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
 }
 
 /* ============ Block-found toast ============ */

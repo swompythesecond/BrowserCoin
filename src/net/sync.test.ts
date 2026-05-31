@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Blockchain } from '../chain/blockchain.js';
 import { hashHeader, type Block } from '../chain/block.js';
 import { emptyMine } from '../chain/testutil.js';
 import { generateKeyPair } from '../crypto/keys.js';
 import { bytesToHex } from '../util/binary.js';
+import { Mempool } from '../chain/mempool.js';
+import { ServerSync } from './serverSync.js';
+import { signTx } from '../chain/transaction.js';
 
 /**
  * Regression test for the bug the user hit: two browsers mined independent chains
@@ -98,5 +101,80 @@ describe('peer sync (orphan-pool reconciliation)', () => {
 
     expect(chainA.height).toBe(7);
     expect(bytesToHex(chainA.tip.hash)).toBe(bytesToHex(chainB.tip.hash));
+  });
+});
+
+/**
+ * The server bridge is what feeds a NAT-stuck / server-only miner: peered nodes
+ * learn txs over P2P, so ServerSync only pulls the server mempool when the node
+ * is isolated (0 peers) or actively mining. These tests stub `fetch` and drive
+ * `syncOnce` directly to assert exactly when /mempool gets pulled.
+ */
+describe('server bridge mempool gating', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // A fetch stub that records request paths and reports the server as being at
+  // our genesis tip (so no block sync runs and we isolate the mempool logic).
+  function stubFetch(chain: Blockchain): string[] {
+    const paths: string[] = [];
+    const tipHash = bytesToHex(chain.tip.hash);
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = new URL(url.toString());
+      paths.push(`${init?.method ?? 'GET'} ${u.pathname}`);
+      const json = (data: unknown) => ({ ok: true, json: async () => data });
+      if (u.pathname === '/tip') return json({ height: 0, tipHash });
+      if (u.pathname === '/mempool') return json({ txs: [] });
+      if (u.pathname === '/blocks') return json({ blocks: [] });
+      if (u.pathname === '/txs') return json({ admitted: 0, errors: [] });
+      return json({});
+    }));
+    return paths;
+  }
+
+  // syncOnce is private; drive it directly for a deterministic, awaitable test.
+  const runSync = (s: ServerSync) =>
+    (s as unknown as { syncOnce(): Promise<void> }).syncOnce();
+
+  it('pulls the server mempool when isolated (0 peers)', async () => {
+    const chain = new Blockchain();
+    const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {});
+    const paths = stubFetch(chain);
+    await runSync(sync); // peerCount defaults to 0
+    expect(paths).toContain('GET /mempool');
+  });
+
+  it('does NOT pull the server mempool when peered and not mining', async () => {
+    const chain = new Blockchain();
+    const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {});
+    const paths = stubFetch(chain);
+    sync.setPeerCount(2);
+    await runSync(sync);
+    expect(paths).not.toContain('GET /mempool');
+  });
+
+  it('pulls the server mempool when mining even if peered', async () => {
+    const chain = new Blockchain();
+    const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {}, () => true);
+    const paths = stubFetch(chain);
+    sync.setPeerCount(2);
+    await runSync(sync);
+    expect(paths).toContain('GET /mempool');
+  });
+
+  it('pushTx POSTs the authored tx to the server for durability', async () => {
+    const chain = new Blockchain();
+    const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {});
+    const paths = stubFetch(chain);
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    const tx = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    sync.pushTx(tx);
+    await new Promise((r) => setTimeout(r, 0)); // let the fire-and-forget POST resolve
+    expect(paths).toContain('POST /txs');
   });
 });

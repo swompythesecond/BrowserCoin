@@ -19,6 +19,12 @@
         <div class="sync-meta" data-sync-meta>local 0 / server —</div>
         <div class="sync-phase" data-sync-phase>preparing</div>
         <button class="sync-dismiss" data-sync-dismiss hidden>Continue offline</button>
+        <details class="advanced sync-advanced" data-sync-advanced hidden>
+          <summary>Advanced</summary>
+          <p class="sync-advanced-note">More cores verify the chain faster but use more memory and CPU. Takes effect immediately.</p>
+          <label class="sync-advanced-label">Verification cores: <span data-sync-vcores>4</span> <span class="muted">/ <span data-sync-vmax>?</span></span></label>
+          <input type="range" min="1" max="1" value="1" step="1" class="slider" data-sync-vslider />
+        </details>
       </div>
     </div>
 

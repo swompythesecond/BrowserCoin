@@ -7,5 +7,6 @@ dist
 .env.local
 server/dist
 server/chain.json
+server/backups-*/
 .claude
 *.stackdump

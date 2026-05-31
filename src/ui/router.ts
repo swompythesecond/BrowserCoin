@@ -93,6 +93,11 @@ export function wireNav(router: Router, root: HTMLElement = document.body): void
     });
   });
 
+  // Clicking the brand (logo + name) returns to the home page.
+  root.querySelector<HTMLElement>('.brand')?.addEventListener('click', () => {
+    router.navigate('/');
+  });
+
   document.addEventListener('click', (e) => {
     if (e.defaultPrevented) return;
     if (e.button !== 0) return;

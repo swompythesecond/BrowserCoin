@@ -35,6 +35,16 @@ export class Mempool {
     return this.entries.has(hashHex);
   }
 
+  /** Fetch a single pooled tx by its hash hex, or undefined if absent. */
+  get(hashHex: string): Transaction | undefined {
+    return this.entries.get(hashHex)?.tx;
+  }
+
+  /** Hash hexes of every pooled tx — used for `inv`-style hash announcements. */
+  hashes(): string[] {
+    return [...this.entries.keys()];
+  }
+
   /**
    * Try to admit a transaction. Returns null on success, or an error string.
    * `state` is the current chain-tip state — used for sender-nonce / balance checks.

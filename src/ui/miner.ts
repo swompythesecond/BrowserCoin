@@ -717,10 +717,13 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
   document.body.appendChild(overlay);
   openModal = overlay;
 
+  let dismissing = false;
   const close = (): void => {
+    dismissing = true;
     overlay.remove();
     openModal = null;
     unsubNet();
+    unsubServer();
   };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
@@ -745,8 +748,21 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
       copyBtn.disabled = true;
     }
   };
+
+  // React to any change in connectivity while the modal is up: refresh the
+  // peer-ID field, and — crucially — close the modal once we're no longer
+  // fully offline. Without this, a connection that comes back on its own (a
+  // peer dials in, or the bootstrap server returns) leaves the stale "you're
+  // offline" dialog stuck on screen. We watch both network and server status
+  // since either path counts as being back online. `dismissing` guards against
+  // re-entrancy from the successful-dial flow, which closes itself.
+  const onConnChange = (): void => {
+    renderId();
+    if (!dismissing && !isMiningOffline(node)) close();
+  };
   renderId();
-  const unsubNet = node.network?.onStatus(renderId) ?? (() => {});
+  const unsubNet = node.network?.onStatus(onConnChange) ?? (() => {});
+  const unsubServer = node.serverSync?.onStatus(onConnChange) ?? (() => {});
 
   copyBtn.addEventListener('click', () => {
     const id = node.network?.getStatus().myId;
@@ -768,8 +784,10 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
       if (ok) {
         msgEl.textContent = 'Connected ✓';
         msgEl.className = 'text-sm green';
-        // Brief pause so the user sees the success state, then auto-close —
+        // Suppress the connectivity-driven auto-close so the success state
+        // stays visible for the brief pause below, then close ourselves —
         // they're back online, the modal has served its purpose.
+        dismissing = true;
         setTimeout(() => close(), 700);
       } else {
         msgEl.textContent = 'Could not reach that peer. Double-check the ID.';

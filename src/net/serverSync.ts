@@ -3,7 +3,7 @@ import { decodeBlock, encodeBlock, hashHeader, type Block } from '../chain/block
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Mempool } from '../chain/mempool.js';
 import { decodeTx, encodeTx, txHash, type Transaction } from '../chain/transaction.js';
-import { VerifierPool, defaultVerifierPoolSize } from '../chain/verifierPool.js';
+import { VerifierPool, configuredVerifierCores } from '../chain/verifierPool.js';
 import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, tryRead } from './apiFanout.js';
 
 const PUSH_BATCH = 50;
@@ -78,8 +78,14 @@ export class ServerSync {
   private peerCount = 0;
   private bootstrapped = false;
 
-  /** Hashes of txs we've already pushed to the server; prevents re-POST on every kick. */
-  private pushedTxHashes = new Set<string>();
+  /**
+   * Txs this node authored that haven't confirmed yet, keyed by hash hex. We
+   * re-POST these to the servers on every sync tick until they leave our
+   * mempool (confirmed on the canonical chain, or evicted) — Bitcoin-style,
+   * the wallet that created a tx is responsible for rebroadcasting it. Bounded
+   * by how much *this* user sends, so it stays cheap as the network grows.
+   */
+  private localPending = new Map<string, Transaction>();
 
   /** Lazily-created pool of PoW verifier workers. */
   private verifier: VerifierPool | null = null;
@@ -90,13 +96,28 @@ export class ServerSync {
     private apiServers: string[],
     /** Called whenever sync caused our local chain to change. */
     private onUpdate: () => void,
+    /**
+     * Whether this node is actively mining. A mining node always pulls the
+     * server mempool (it needs every pending tx to build full blocks); a
+     * non-mining node only pulls when it has no P2P peers to learn txs from.
+     */
+    private isMining: () => boolean = () => false,
   ) {
     this.status.total = apiServers.length;
   }
 
   private getVerifier(): VerifierPool {
-    if (!this.verifier) this.verifier = new VerifierPool(defaultVerifierPoolSize());
+    if (!this.verifier) this.verifier = new VerifierPool(configuredVerifierCores());
     return this.verifier;
+  }
+
+  /**
+   * Change how many cores bulk-sync verification uses, applied live. If a pool
+   * is already running it resizes in place; otherwise the next one picks up the
+   * value from localStorage on its own.
+   */
+  setVerifierConcurrency(cores: number): void {
+    this.verifier?.setSize(cores);
   }
 
   setApiServers(urls: string[]): void {
@@ -188,13 +209,31 @@ export class ServerSync {
     void this.syncOnce();
   }
 
-  /** Push a single tx to every reachable API server right away (best-effort). */
+  /**
+   * Push a tx this node just authored to every reachable API server right away,
+   * and remember it so we keep re-pushing on each sync tick until it confirms.
+   * The immediate POST gives low latency; the retry survives a server that was
+   * briefly unreachable when the tx was first sent.
+   */
   pushTx(tx: Transaction): void {
     const hashHex = bytesToHex(txHash(tx));
-    if (this.pushedTxHashes.has(hashHex)) return;
-    void this.postTxs([tx]).then((acks) => {
-      if (acks > 0) this.pushedTxHashes.add(hashHex);
-    });
+    this.localPending.set(hashHex, tx);
+    void this.postTxs([tx]);
+  }
+
+  /**
+   * Re-POST our still-unconfirmed authored txs and forget any that have left
+   * the mempool (confirmed on the canonical chain, or evicted). Self-terminates
+   * per tx — nothing is re-pushed forever.
+   */
+  private pushLocalPending(): void {
+    if (this.localPending.size === 0) return;
+    const stillPending: Transaction[] = [];
+    for (const [hashHex, tx] of this.localPending) {
+      if (this.mempool.has(hashHex)) stillPending.push(tx);
+      else this.localPending.delete(hashHex);
+    }
+    if (stillPending.length > 0) void this.postTxs(stillPending);
   }
 
   /**
@@ -291,6 +330,16 @@ export class ServerSync {
       if (this.chain.height > tip.height) {
         await this.pushFrom(tip.height + 1);
       }
+
+      // Mempool reconciliation. Peered nodes learn pending txs over P2P, so
+      // only pull when we'd otherwise be starved: no peers (isolated rescue)
+      // or actively mining (a miner needs every pending tx to build full
+      // blocks — this is what feeds a NAT-stuck server-only miner). Always
+      // re-push our own authored txs, which is cheap and bounded.
+      if (this.peerCount === 0 || this.isMining()) {
+        await this.pullMempool();
+      }
+      this.pushLocalPending();
     } catch (e) {
       console.warn('[serverSync] error:', (e as Error).message);
     } finally {
@@ -449,8 +498,6 @@ export class ServerSync {
       if (this.mempool.has(h)) continue;
       const err = this.mempool.add(tx, this.chain.tipState);
       if (!err) added = true;
-      // Server already has it — no need to bounce it back.
-      this.pushedTxHashes.add(h);
     }
     if (added) this.onUpdate();
   }

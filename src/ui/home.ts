@@ -297,7 +297,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     nonceEl.textContent = `nonce ${node.myNonce()}`;
     renderAddressQr(qrEl, node.wallet.address);
 
-    const rows = computeActivity(node, 200).slice(0, PREVIEW_ROWS);
+    const rows = computeActivity(node, 2000, PREVIEW_ROWS).slice(0, PREVIEW_ROWS);
     actRowsEl.innerHTML = rows.length === 0
       ? `<tr class="table-empty"><td colspan="5">No activity yet — share your address to receive ${TICKER}, or start mining.</td></tr>`
       : renderActivityRows(rows);

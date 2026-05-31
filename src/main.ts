@@ -17,6 +17,7 @@ import { mountDevelopers } from './ui/developers.js';
 import { compactToTarget } from './util/binary.js';
 import { Router, wireNav } from './ui/router.js';
 import { TICKER } from './brand.js';
+import { VERIFY_CORES_KEY, maxVerifierCores, configuredVerifierCores } from './chain/verifierPool.js';
 
 const node = new Node();
 
@@ -190,6 +191,32 @@ const PHASE_SUB: Record<string, string> = {
 
 overlayDismiss.addEventListener('click', () => node.dismissSyncOverlay());
 
+// Live "verification cores" control on the sync overlay. This is the moment it
+// actually matters — the chain is being verified right now, behind this overlay
+// — so the user can dial cores up/down and feel the ETA move. The pool resizes
+// in place via setVerifierConcurrency; the choice is also persisted so the next
+// fresh sync starts where they left it. (Settings has the same control for
+// pre-configuring before a sync starts.)
+const overlayAdvanced = document.querySelector<HTMLDetailsElement>('[data-sync-advanced]')!;
+const overlayVSlider = document.querySelector<HTMLInputElement>('[data-sync-vslider]')!;
+const overlayVCores = document.querySelector<HTMLElement>('[data-sync-vcores]')!;
+const overlayVMax = document.querySelector<HTMLElement>('[data-sync-vmax]')!;
+{
+  const maxV = maxVerifierCores();
+  const savedV = configuredVerifierCores();
+  overlayVMax.textContent = String(maxV);
+  overlayVSlider.max = String(maxV);
+  overlayVSlider.value = String(savedV);
+  overlayVCores.textContent = String(savedV);
+  if (maxV === 1) overlayVSlider.disabled = true;
+  overlayVSlider.addEventListener('input', () => {
+    const n = Math.max(1, Math.min(maxV, Math.floor(Number(overlayVSlider.value)) || 1));
+    overlayVCores.textContent = String(n);
+    localStorage.setItem(VERIFY_CORES_KEY, String(n));
+    node.serverSync?.setVerifierConcurrency(n);
+  });
+}
+
 // ETA estimator. Tracks first observed (height, time) once verification is
 // actually progressing, then projects remaining time from the observed rate.
 // Cleared on phase change so the estimate resets between restoring and
@@ -250,6 +277,9 @@ function paintSync(): void {
   overlayTitle.textContent = PHASE_TITLE[s.phase] ?? 'Connecting';
   overlaySub.textContent = PHASE_SUB[s.phase] ?? '';
   overlayDismiss.hidden = !s.canDismiss;
+  // Only surface the cores control while we're actually pulling/verifying the
+  // chain — it's meaningless during local-cache replay or the connect phase.
+  overlayAdvanced.hidden = s.phase !== 'verifying' && s.phase !== 'fetching';
 }
 
 node.onSync(paintSync);

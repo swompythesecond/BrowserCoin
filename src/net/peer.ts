@@ -106,6 +106,14 @@ export class PeerNetwork {
    */
   private orphans = new Map<string, Block>();
   /**
+   * Tx hashes we've sent a `getTx` for and are still waiting on. Stops us from
+   * re-requesting the same tx from every peer that announces it via `invTxs`.
+   * Cleared when the body arrives (or the entry is naturally re-requestable
+   * after the peer set churns — we clear on receipt, which covers the common
+   * case).
+   */
+  private requestedTx = new Set<string>();
+  /**
    * Peer IDs we've learned about via gossip (or restored from IDB on startup)
    * but haven't necessarily connected to yet. When we drop below MIN_PEERS we
    * try these *before* falling back to the helper servers' /peers list. The
@@ -241,7 +249,13 @@ export class PeerNetwork {
     // Periodic mempool re-flood: covers peers who connected after a tx was
     // first broadcast, and peers who briefly dropped and reconnected.
     // Receivers dedupe via mempool.has(), so this is cheap and self-bounding.
-    this.txRebroadcastTimer = setInterval(() => this.gossipMempool(), TX_REBROADCAST_MS);
+    this.txRebroadcastTimer = setInterval(() => {
+      // Drop stale in-flight requests so an unanswered `getTx` (peer vanished
+      // mid-response) gets retried on the next `invTxs` instead of being
+      // wedged forever. Also bounds the set's memory.
+      this.requestedTx.clear();
+      this.announceMempool();
+    }, TX_REBROADCAST_MS);
 
     // Send a first heartbeat right away to register ourselves on every API server.
     void this.heartbeat();
@@ -342,15 +356,37 @@ export class PeerNetwork {
     this.broadcast(encodeTxMsg(tx));
   }
 
-  /** Send every pending tx in our local mempool to every connected peer. */
-  private gossipMempool(to?: DataConnection): void {
+  /**
+   * Announce our pending-tx hashes (not bodies) to peers via a single batched
+   * `invTxs`. Peers reply `getTx` for the ones they're missing — so a peer that
+   * joined after a sender broadcast still learns about the pending tx, and the
+   * periodic re-announce costs ~32 B/tx instead of re-flooding full bodies.
+   */
+  private announceMempool(to?: DataConnection): void {
     const targets = to ? [to] : [...this.connections.values()];
     if (targets.length === 0) return;
-    for (const tx of this.mempool.list()) {
-      const msg = encodeTxMsg(tx);
-      for (const c of targets) {
-        try { c.send(msg); } catch { /* ignore */ }
-      }
+    const hashes = this.mempool.hashes();
+    if (hashes.length === 0) return;
+    const msg: ProtoMsg = { t: 'invTxs', hashes };
+    for (const c of targets) {
+      try { c.send(msg); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * On hearing a tx hash we don't have, ask the announcing peer for the body —
+   * unless we already have it pooled or a `getTx` for it is already outstanding.
+   */
+  private requestTxIfMissing(hashHex: string, from: DataConnection): void {
+    if (this.mempool.has(hashHex)) return;
+    if (this.requestedTx.has(hashHex)) return;
+    this.requestedTx.add(hashHex);
+    try {
+      from.send({ t: 'getTx', hash: hashHex } satisfies ProtoMsg);
+    } catch {
+      // Peer went away mid-request; allow a re-request when another peer
+      // announces the same hash.
+      this.requestedTx.delete(hashHex);
     }
   }
 
@@ -444,10 +480,10 @@ export class PeerNetwork {
       // Ask for more peer IDs so we can broaden the mesh independently of any
       // helper server.
       conn.send({ t: 'getAddrs', max: 32 } satisfies ProtoMsg);
-      // Flood the new peer with everything we've got in the mempool. Without
-      // this, a peer joining 1s after a sender broadcasts never hears about
-      // the pending tx and won't include it when it mines.
-      this.gossipMempool(conn);
+      // Announce our mempool tx hashes to the new peer. Without this, a peer
+      // joining 1s after a sender broadcasts never hears about the pending tx
+      // and won't include it when it mines. They `getTx` whatever they lack.
+      this.announceMempool(conn);
     });
     conn.on('data', (data) => this.onIncoming(conn, data as ProtoMsg));
     conn.on('close', () => {
@@ -498,6 +534,8 @@ export class PeerNetwork {
         case 'tx': {
           const tx = decodeTxMsg(msg);
           const hashHex = bytesToHex(txHash(tx));
+          // The body arrived — no longer awaiting it.
+          this.requestedTx.delete(hashHex);
           // Already in our mempool → drop without re-flooding. Without this
           // check, mempool.add() returns null for duplicates too, so peers
           // would ping-pong every tx forever in a 3+ peer mesh.
@@ -608,10 +646,30 @@ export class PeerNetwork {
           // lastSeen already refreshed at the top of the switch.
           break;
 
+        case 'invTx':
+          this.requestTxIfMissing(msg.hash, conn);
+          break;
+
+        case 'invTxs':
+          for (const hash of msg.hashes) {
+            if (typeof hash !== 'string') continue;
+            this.requestTxIfMissing(hash, conn);
+          }
+          break;
+
+        case 'getTx': {
+          // Serve the full body if we have it pending. (Confirmed txs aren't
+          // kept around — the peer will learn them via block sync instead.)
+          const tx = this.mempool.get(msg.hash);
+          if (tx) {
+            try { conn.send(encodeTxMsg(tx)); } catch { /* ignore */ }
+          }
+          break;
+        }
+
         case 'getHeaders':
         case 'headers':
         case 'invBlock':
-        case 'invTx':
           // Future work: implement light-header sync. Orphan-pool backfill
           // above handles arbitrary-depth divergence already — slower than a
           // batched header sync, but correct.
@@ -633,7 +691,8 @@ export class PeerNetwork {
 
     const err = await this.chain.addBlock(block);
     if (err === null) {
-      this.mempool.removeMany(block.transactions);
+      // Mempool reconciliation happens in the chain's onTipChanged handler
+      // (wired by Node) — only canonical-confirmed txs are evicted there.
       await this.drainOrphans(ownHashHex);
       // Re-gossip to other peers.
       const msg = encodeBlockMsg(block);
@@ -685,7 +744,7 @@ export class PeerNetwork {
         console.warn('[peer] drained orphan rejected:', err);
         return;
       }
-      this.mempool.removeMany(waiting.transactions);
+      // Mempool reconciliation happens in the chain's onTipChanged handler.
       cursor = bytesToHex(hashHeader(waiting.header));
     }
   }

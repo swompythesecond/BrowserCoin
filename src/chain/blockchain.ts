@@ -36,6 +36,18 @@ export interface ChainBlock {
   state: State;            // state AFTER applying this block
 }
 
+/**
+ * Description of how the canonical chain changed when the tip moved. `confirmed`
+ * txs are now on the active chain (drop them from the mempool); `restored` txs
+ * were displaced by a reorg and should go back into the mempool so they can be
+ * re-mined. For a plain tip-extension `restored` is empty and `confirmed` is
+ * just the new block's txs.
+ */
+export interface ReorgDelta {
+  confirmed: Transaction[];
+  restored: Transaction[];
+}
+
 export type ValidationError = string;
 
 /**
@@ -51,6 +63,8 @@ export class Blockchain {
   private tipHash: string;
   /** Listeners invoked after a block is accepted (any branch). Hash-hex passed for keying. */
   private acceptListeners = new Set<(cb: ChainBlock) => void>();
+  /** Listeners invoked only when the canonical tip moves, with the mempool delta. */
+  private tipChangeListeners = new Set<(d: ReorgDelta) => void>();
 
   constructor() {
     const genHash = hashHeader(GENESIS.header);
@@ -68,6 +82,18 @@ export class Blockchain {
   onBlockAdded(fn: (cb: ChainBlock) => void): () => void {
     this.acceptListeners.add(fn);
     return () => this.acceptListeners.delete(fn);
+  }
+
+  /**
+   * Subscribe to canonical-tip moves. Fires only when the active chain changes
+   * (a plain extension or a reorg) with the txs that became confirmed and the
+   * txs that were displaced back into pending. This is the single place mempool
+   * eviction should hang off — a tx must never leave the mempool just because
+   * it appeared in some accepted-but-non-canonical fork block.
+   */
+  onTipChanged(fn: (d: ReorgDelta) => void): () => void {
+    this.tipChangeListeners.add(fn);
+    return () => this.tipChangeListeners.delete(fn);
   }
 
   get tip(): ChainBlock {
@@ -194,11 +220,61 @@ export class Blockchain {
     const accepted: ChainBlock = { block, hash, work, state: newState };
     this.blocks.set(hashHex, accepted);
 
+    const prevTipHex = this.tipHash;
     if (work > this.tip.work) {
       this.tipHash = hashHex;
     }
     for (const fn of this.acceptListeners) fn(accepted);
+
+    // If the canonical tip moved, tell mempool-reconciliation listeners which
+    // txs are now confirmed and which were displaced. Computed even when the
+    // move is a plain extension (cheap: empty `restored`, one block's txs).
+    if (this.tipHash !== prevTipHex && this.tipChangeListeners.size > 0) {
+      const delta = this.reorgDelta(prevTipHex, this.tipHash);
+      for (const fn of this.tipChangeListeners) fn(delta);
+    }
     return null;
+  }
+
+  /**
+   * Diff two canonical tips by their hashes: walk both back to their common
+   * ancestor. Txs on the old branch (above the ancestor) are `restored`
+   * (return to mempool); txs on the new branch are `confirmed` (leave mempool).
+   */
+  private reorgDelta(oldTipHex: string, newTipHex: string): ReorgDelta {
+    const oldBlocks: Block[] = [];
+    const newBlocks: Block[] = [];
+    let aHex: string = oldTipHex;
+    let bHex: string = newTipHex;
+    let a = this.blocks.get(aHex);
+    let b = this.blocks.get(bHex);
+
+    // Bring the deeper branch up until both cursors sit at the same height.
+    while (a && b && a.block.header.height > b.block.header.height) {
+      oldBlocks.push(a.block);
+      aHex = bytesToHex(a.block.header.prevHash);
+      a = this.blocks.get(aHex);
+    }
+    while (a && b && b.block.header.height > a.block.header.height) {
+      newBlocks.push(b.block);
+      bHex = bytesToHex(b.block.header.prevHash);
+      b = this.blocks.get(bHex);
+    }
+    // Same height now — step both back together until they converge.
+    while (a && b && aHex !== bHex) {
+      oldBlocks.push(a.block);
+      newBlocks.push(b.block);
+      aHex = bytesToHex(a.block.header.prevHash);
+      bHex = bytesToHex(b.block.header.prevHash);
+      a = this.blocks.get(aHex);
+      b = this.blocks.get(bHex);
+    }
+
+    const restored: Transaction[] = [];
+    for (const blk of oldBlocks) for (const tx of blk.transactions) restored.push(tx);
+    const confirmed: Transaction[] = [];
+    for (const blk of newBlocks) for (const tx of blk.transactions) confirmed.push(tx);
+    return { confirmed, restored };
   }
 
   /**
