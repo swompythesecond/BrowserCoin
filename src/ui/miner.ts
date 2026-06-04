@@ -235,9 +235,10 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const diagOom = view.querySelector<HTMLElement>('[data-w="diagOom"]')!;
   const diagOomSub = view.querySelector<HTMLElement>('[data-w="diagOomSub"]')!;
 
-  // Session-level baselines that don't belong in the controller — they bracket
-  // "since the user pressed Start in this view" rather than controller lifetime.
-  let sessionStartMs: number | null = null;
+  // Per-template baseline for the "hashes on this template" counter. The
+  // session-spanning timing (start time + total hashes) lives in the controller
+  // and is read off the status, so the session average uses a wall clock that
+  // can't desync from the worker's hash counting while the tab is backgrounded.
   let attemptHashesBaseline = 0;
   let lastAttemptStartedAt: number | null = null;
 
@@ -338,14 +339,12 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     if (!s.running) {
       diagIdle.hidden = false;
       diagBody.hidden = true;
-      sessionStartMs = null;
       attemptHashesBaseline = 0;
       return;
     }
     diagIdle.hidden = true;
     diagBody.hidden = false;
     const now = performance.now();
-    if (sessionStartMs === null) sessionStartMs = now;
     // Snapshot session-total hashes on every fresh attempt so the per-attempt
     // counter resets to 0 when a block is mined and a new template starts.
     if (s.attemptStartedAt !== lastAttemptStartedAt) {
@@ -430,7 +429,12 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       diagPFoundSub.textContent = `under 95% is still normal-luck territory`;
     }
 
-    const sessionElapsedSec = (now - sessionStartMs) / 1000;
+    // Wall-clock elapsed (Date.now), anchored in the controller at start(). Using
+    // the wall clock rather than performance.now() keeps the denominator honest
+    // when the tab is backgrounded on macOS — see MinerStatus.sessionStartedAt.
+    const sessionElapsedSec = s.sessionStartedAt !== null
+      ? Math.max(0, (Date.now() - s.sessionStartedAt) / 1000)
+      : 0;
     const avg = sessionElapsedSec > 0 ? s.totalHashes / sessionElapsedSec : 0;
     diagAvgRate.textContent =
       `${formatHashNumber(avg)} ${formatHashUnit(avg)} / ${formatHashNumber(s.hashesPerSecond)} ${formatHashUnit(s.hashesPerSecond)}`;

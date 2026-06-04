@@ -53,6 +53,19 @@ export interface MinerStatus {
   workerLastReportAt: number[];
   /** Hashes computed since `start()` (sum of `deltaHashes` from workers). */
   totalHashes: number;
+  /**
+   * Wall-clock (`Date.now()`) epoch ms when the current session started, i.e.
+   * the moment of the `start()` that zeroed `totalHashes`. `null` while idle.
+   *
+   * The session average is `totalHashes / ((Date.now() - sessionStartedAt)/1000)`.
+   * It MUST use the wall clock, not `performance.now()`: a backgrounded tab on
+   * macOS (App Nap) can freeze the main thread's `performance.now()` while the
+   * worker keeps doing — and reporting — real hashes. Measuring elapsed with the
+   * monotonic clock then understates real time and the average spikes far above
+   * the physical hashrate. Wall-clock elapsed always tracks true elapsed time,
+   * so total/elapsed can never exceed what the machine actually did.
+   */
+  sessionStartedAt: number | null;
   /** `performance.now()` when the current template started grinding. Null
    *  while idle. */
   attemptStartedAt: number | null;
@@ -102,6 +115,7 @@ export class MinerController {
     workerHashrates: [],
     workerLastReportAt: [],
     totalHashes: 0,
+    sessionStartedAt: null,
     attemptStartedAt: null,
     attemptCount: 0,
     oomCount: 0,
@@ -247,6 +261,7 @@ export class MinerController {
     this.status.blockedReason = undefined;
     this.status.running = true;
     this.status.totalHashes = 0;
+    this.status.sessionStartedAt = Date.now();
     this.status.attemptCount = 0;
     this.status.attemptStartedAt = null;
     this.status.oomCount = 0;
@@ -272,6 +287,7 @@ export class MinerController {
     this.stopHealthTimer();
     this.terminateWorkers();
     this.status.hashesPerSecond = 0;
+    this.status.sessionStartedAt = null;
     this.status.attemptStartedAt = null;
     this.status.currentDifficulty = null;
     this.status.workerHashrates = [];
