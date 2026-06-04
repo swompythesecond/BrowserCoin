@@ -812,6 +812,12 @@ label {
 .sitefoot-text {
   letter-spacing: 0.1px;
 }
+.sitefoot-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .sitefoot-link {
   display: inline-flex;
   align-items: center;
