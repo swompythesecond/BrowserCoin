@@ -134,6 +134,10 @@ export class Node {
       this.activityIndex.apply(delta);
       for (const tx of delta.restored) this.mempool.add(tx, this.chain.tipState);
       this.mempool.removeMany(delta.confirmed);
+      // Evict txs whose nonce slot was just taken by a confirmed tx — they can
+      // never be mined now, so they shouldn't keep showing as pending or block
+      // the per-sender nonce walk in selectForBlock.
+      this.mempool.pruneStale(this.chain.tipState);
       this.miner.refresh();
       this.emitChain();
     });
@@ -438,7 +442,10 @@ export class Node {
   }
 
   myNonce(): number {
-    return getAccount(this.chain.tipState, this.wallet.address).nonce;
+    const onChain = getAccount(this.chain.tipState, this.wallet.address).nonce;
+    // Account for our own txs already queued in the mempool so rapid sends get
+    // sequential nonces (N, N+1, …) instead of all reusing the on-chain nonce.
+    return this.mempool.nextNonceFor(this.wallet.address, onChain);
   }
 
   /** Build and submit a tx from the user's wallet. Returns null on success or an error. */

@@ -532,6 +532,16 @@ export class MinerController {
     const budget = MAX_BLOCK_BYTES - 1024;
     const txs = this.mempool.selectForBlock(this.chain.tipState, budget);
 
+    // Surface the "pool full but blocks empty" class of bug instead of letting
+    // it pass silently — if we have pending txs but selected none, every
+    // candidate had a nonce gap / failed selection against the current tip.
+    if (txs.length === 0 && this.mempool.size() > 0) {
+      console.warn(
+        `[miner] template has 0 txs but mempool holds ${this.mempool.size()} ` +
+          '— all pending txs are nonce-gapped or unminable against the current tip',
+      );
+    }
+
     // Simulate apply against tip state to derive stateRoot.
     const sim = cloneState(this.chain.tipState);
     const err = applyBlockTxs(sim, height, this.minerAddress, txs);

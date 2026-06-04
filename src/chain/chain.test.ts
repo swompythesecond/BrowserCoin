@@ -208,6 +208,86 @@ describe('mempool', () => {
     const err = mp.add(tx0, chain.tipState);
     expect(err).toMatch(/nonce too low/);
   });
+
+  it('assigns sequential nonces so rapid sends all become mineable', async () => {
+    const chain = new Blockchain();
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    await chain.addBlock(await emptyMine(chain, alice.publicKey));
+
+    // Simulate a wallet sending 5 txs before any confirms: each new tx takes
+    // its nonce from nextNonceFor (on-chain nonce + what's already pending).
+    const mp = new Mempool();
+    for (let i = 0; i < 5; i++) {
+      const nonce = mp.nextNonceFor(alice.address, getAccount(chain.tipState, alice.address).nonce);
+      const tx = signTx(
+        { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce },
+        alice.privateKey,
+      );
+      expect(mp.add(tx, chain.tipState)).toBeNull();
+    }
+    expect(mp.size()).toBe(5);
+
+    // All five are nonce-contiguous (0..4) → all selectable in one block.
+    const picked = mp.selectForBlock(chain.tipState, 1024 * 1024);
+    expect(picked.length).toBe(5);
+    expect(picked.map((t) => t.nonce).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
+
+    // And the block they form actually validates (sequential nonces).
+    const block = await buildBlock(chain, alice.publicKey, picked);
+    expect(await chain.addBlock(block)).toBeNull();
+  });
+
+  it('replaces a same-nonce tx only when the new one pays more (RBF)', async () => {
+    const chain = new Blockchain();
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    await chain.addBlock(await emptyMine(chain, alice.publicKey));
+
+    const mp = new Mempool();
+    const cheap = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    const pricier = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 2n, fee: 5000n, nonce: 0 },
+      alice.privateKey,
+    );
+    expect(mp.add(cheap, chain.tipState)).toBeNull();
+    // Higher fee for the same nonce replaces; pool never holds two.
+    expect(mp.add(pricier, chain.tipState)).toBeNull();
+    expect(mp.size()).toBe(1);
+    // A lower/equal-fee collision is rejected, not stacked.
+    expect(mp.add(cheap, chain.tipState)).toMatch(/nonce already pending/);
+    expect(mp.size()).toBe(1);
+    expect(mp.list()[0]!.fee).toBe(5000n);
+  });
+
+  it('prunes txs whose nonce slot was taken by a confirmed tx', async () => {
+    const chain = new Blockchain();
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    await chain.addBlock(await emptyMine(chain, alice.publicKey));
+
+    const mp = new Mempool();
+    const pending = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    expect(mp.add(pending, chain.tipState)).toBeNull();
+
+    // A *different* tx confirms Alice's nonce 0 on-chain (e.g. mined elsewhere).
+    const confirmed = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 7n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    expect(await chain.addBlock(await buildBlock(chain, alice.publicKey, [confirmed]))).toBeNull();
+    expect(getAccount(chain.tipState, alice.address).nonce).toBe(1);
+
+    // The still-pending nonce-0 tx is now dead; pruneStale evicts it.
+    expect(mp.pruneStale(chain.tipState)).toBe(1);
+    expect(mp.size()).toBe(0);
+  });
 });
 
 describe('fork-choice', () => {

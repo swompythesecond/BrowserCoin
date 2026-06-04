@@ -56,7 +56,8 @@ export class Mempool {
     const feePerByte = tx.fee / BigInt(TX_ENCODED_LEN);
     if (feePerByte < MIN_FEE_PER_BYTE) return 'fee too low';
 
-    const sender = getAccount(state, bytesToHex(tx.from));
+    const fromHex = bytesToHex(tx.from);
+    const sender = getAccount(state, fromHex);
     if (sender.balance < tx.amount + tx.fee) return 'insufficient balance';
     // We allow nonces ≥ current expected (so a sender can queue a few ahead),
     // but cap how far ahead they can go to avoid memory pinning.
@@ -65,6 +66,19 @@ export class Mempool {
 
     const hashHex = bytesToHex(txHash(tx));
     if (this.entries.has(hashHex)) return null;
+
+    // Replace-by-fee: a sender may hold only ONE tx per nonce in the pool.
+    // Block validation requires strictly sequential nonces (applyTx rejects
+    // `tx.nonce !== sender.nonce`), so two txs sharing a (sender, nonce) can
+    // never both be mined — admitting both just wedges the pool with a tx
+    // that masquerades as pending forever. Keep whichever pays more.
+    for (const e of this.entries.values()) {
+      if (e.tx.nonce === tx.nonce && bytesToHex(e.tx.from) === fromHex) {
+        if (feePerByte <= e.feePerByte) return 'nonce already pending';
+        this.entries.delete(e.hashHex);
+        break;
+      }
+    }
 
     if (this.entries.size >= MAX_MEMPOOL_TXS) {
       // Evict the lowest-fee entry. Simple, not optimal — adequate for v1.
@@ -85,6 +99,42 @@ export class Mempool {
     for (const tx of txs) {
       this.entries.delete(bytesToHex(txHash(tx)));
     }
+  }
+
+  /**
+   * The nonce a sender should assign to a *new* tx, accounting for txs already
+   * pending in this pool. Without this a wallet that sends several txs before
+   * any confirms reuses the on-chain nonce for all of them — only the first is
+   * ever mineable and the rest wedge the pool. Returns `onChainNonce` when the
+   * sender has nothing pending.
+   */
+  nextNonceFor(addressHex: string, onChainNonce: number): number {
+    let next = onChainNonce;
+    for (const e of this.entries.values()) {
+      if (bytesToHex(e.tx.from) === addressHex && e.tx.nonce >= next) {
+        next = e.tx.nonce + 1;
+      }
+    }
+    return next;
+  }
+
+  /**
+   * Drop txs that can no longer be mined against `state` — a different tx has
+   * already taken their nonce slot (`tx.nonce < sender.nonce`). That slot is
+   * consumed forever, so the tx is dead weight. Called on every tip change so
+   * "pending" always means "actually mineable" and a wedged pool self-heals.
+   * Returns the number of entries removed.
+   */
+  pruneStale(state: State): number {
+    let removed = 0;
+    for (const e of [...this.entries.values()]) {
+      const sender = getAccount(state, bytesToHex(e.tx.from));
+      if (e.tx.nonce < sender.nonce) {
+        this.entries.delete(e.hashHex);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   /**
