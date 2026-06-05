@@ -263,7 +263,10 @@ function formatEtaSeconds(s: number): string {
 
 function paintSync(): void {
   const s = node.getSyncStatus();
-  if (!s.syncing) {
+  // Overlay is down once we're caught up OR the user chose "Continue offline".
+  // `dismissed` is sticky for the session, so background sync re-discovering
+  // backlog (syncing flips back to true) can't pull the overlay back up.
+  if (!s.syncing || s.dismissed) {
     overlay.classList.add('hidden');
     return;
   }
@@ -317,17 +320,18 @@ function maybePopOffline(): void {
   wasOffline = offline;
 }
 
-// Arm once the sync overlay actually comes down (syncing flips false). We wait
-// for that rather than for a specific phase, because the overlay now stays up
-// during 'offline' until the user explicitly dismisses — and we don't want to
-// stack the offline modal on top of the still-visible overlay.
+// Arm once the sync overlay actually comes down — either we caught up (syncing
+// flips false) or the user clicked "Continue offline" (dismissed). We wait for
+// that rather than for a specific phase, because the overlay stays up during
+// 'offline' until the user explicitly dismisses — and we don't want to stack
+// the offline modal on top of the still-visible overlay.
 // `serverSync` and `network` are both created during `node.start()`, so by
 // the time the first sync event fires they're guaranteed to exist.
 // Starting `wasOffline = false` is intentional — if we boot already offline
 // and the user dismisses, the first maybePopOffline() call sees an offline-
 // transition and pops the connect-by-ID modal.
 node.onSync((s) => {
-  if (!armed && !s.syncing) {
+  if (!armed && (!s.syncing || s.dismissed)) {
     armed = true;
     node.serverSync?.onStatus(maybePopOffline);
     node.network?.onStatus(maybePopOffline);

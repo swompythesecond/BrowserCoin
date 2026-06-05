@@ -71,6 +71,14 @@ export interface SyncStatus {
    * offline users aren't stuck behind the overlay forever.
    */
   canDismiss: boolean;
+  /**
+   * True once the user clicked "Continue offline". Sticky for the session: the
+   * overlay stays hidden even though `syncing` may still be true (and may bounce
+   * back to true as `updateSyncReadiness` discovers fresh backlog). Mining stays
+   * gated on `syncing`, not this — dismissing only hides the UI, it doesn't
+   * declare the chain caught up.
+   */
+  dismissed: boolean;
 }
 
 /**
@@ -108,6 +116,7 @@ export class Node {
     localHeight: 0,
     phase: 'restoring',
     canDismiss: false,
+    dismissed: false,
   };
 
   constructor() {
@@ -319,7 +328,7 @@ export class Node {
       this.emitSync({ syncing: true, phase: 'verifying' });
       return;
     }
-    if (!this.syncStatus.syncing) return; // within threshold and already dismissed
+    if (!this.syncStatus.syncing) return; // within threshold and already caught up
 
     const serverUp = !!ss && ss.reachable > 0;
     const peerUp = !!ns && ns.connected > 0;
@@ -337,13 +346,17 @@ export class Node {
   }
 
   /**
-   * User clicked "Continue offline" on the sync overlay. Forces the overlay
-   * down so they can interact with the app even though we never reached the
-   * network. Balances may be stale; mining will be gated separately.
+   * User clicked "Continue offline" on the sync overlay. Hides the overlay for
+   * the rest of the session so they can interact with the app while sync
+   * continues in the background. We deliberately do NOT flip `syncing` false:
+   * the node really is still catching up, so mining stays gated and
+   * `updateSyncReadiness` keeps tracking backlog — it just can't re-surface the
+   * overlay, because the UI gates visibility on this sticky flag. Balances may
+   * be stale until the chain catches up.
    */
   dismissSyncOverlay(): void {
-    if (!this.syncStatus.syncing) return;
-    this.emitSync({ syncing: false, phase: 'offline' });
+    if (this.syncStatus.dismissed) return;
+    this.emitSync({ dismissed: true });
   }
 
   async startNetwork(): Promise<void> {
