@@ -6,6 +6,7 @@ import { computeActivity, filterActivity, renderActivityRows, type ActivityFilte
 import { cardHeader } from './info.js';
 import { renderPager } from './pager.js';
 import { renderAddressQr } from './qr.js';
+import { openScanner } from './qrScanner.js';
 
 const PAGE_SIZE = 25;
 
@@ -49,7 +50,10 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
       <section class="card col-5" data-mount="send">
         <div data-slot="header"></div>
         <label>Recipient address (64 hex chars)</label>
-        <input data-w="to" placeholder="paste address here" />
+        <div class="row">
+          <input data-w="to" placeholder="paste address here" />
+          <button class="ghost" data-w="scan">Scan</button>
+        </div>
         <div class="row mt-sm" style="align-items:flex-end;">
           <div style="flex:1; min-width:0;">
             <label>Amount (${TICKER})</label>
@@ -121,6 +125,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
   const amountEl = view.querySelector<HTMLInputElement>('[data-w="amount"]')!;
   const feeEl = view.querySelector<HTMLInputElement>('[data-w="fee"]')!;
   const sendBtn = view.querySelector<HTMLButtonElement>('[data-w="send"]')!;
+  const scanBtn = view.querySelector<HTMLButtonElement>('[data-w="scan"]')!;
   const msgEl = view.querySelector<HTMLSpanElement>('[data-w="msg"]')!;
 
   const chipsEl = view.querySelector<HTMLElement>('[data-w="chips"]')!;
@@ -150,6 +155,15 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
       copyBtn.textContent = 'Copied!';
       setTimeout(() => (copyBtn.textContent = 'Copy'), 1200);
     });
+  });
+
+  scanBtn.addEventListener('click', async () => {
+    const addr = await openScanner();
+    if (addr) {
+      toEl.value = addr;
+      msgEl.className = 'text-sm green';
+      msgEl.textContent = 'Recipient scanned.';
+    }
   });
 
   sendBtn.addEventListener('click', () => {

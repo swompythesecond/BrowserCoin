@@ -8,6 +8,7 @@ import { cardHeader } from './info.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
+import { openScanner } from './qrScanner.js';
 import { nextDifficulty } from '../chain/consensus.js';
 import { DIFFICULTY_WINDOW, MTP_WINDOW } from '../chain/genesis.js';
 import { isMiningOffline, openOfflineModal } from './miner.js';
@@ -49,6 +50,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
         <div class="row">
           <input data-w="address" readonly />
           <button class="ghost small" data-w="copy">Copy</button>
+          <button class="ghost small" data-w="scan">Scan</button>
           <button class="small" data-w="send">Send →</button>
         </div>
         <div class="qr-wrap mt-md">
@@ -209,6 +211,12 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
 
   view.querySelector<HTMLButtonElement>('[data-mount="balance"] [data-w="send"]')!
     .addEventListener('click', () => router.navigate('/wallet'));
+
+  view.querySelector<HTMLButtonElement>('[data-mount="balance"] [data-w="scan"]')!
+    .addEventListener('click', async () => {
+      const addr = await openScanner();
+      if (addr) router.navigate(`/wallet?to=${addr}`);
+    });
 
   const hashrateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="hashrate"]')!;
   const minerStateEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="state"]')!;

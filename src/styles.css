@@ -794,6 +794,63 @@ label {
 }
 .qr-modal-close:hover { background: var(--surface-4); }
 
+/* ============ QR camera scanner ============ */
+
+.qr-scanner {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 9, 14, 0.78);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  backdrop-filter: blur(4px);
+}
+.qr-scanner.open { display: flex; }
+.qr-scanner-card {
+  position: relative;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.qr-scanner-video-wrap {
+  position: relative;
+  width: 320px;
+  max-width: 80vw;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #000;
+}
+.qr-scanner-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.qr-scanner-frame {
+  position: absolute;
+  inset: 14%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.qr-scanner-caption {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.45;
+}
+
 /* ============ Site footer ============ */
 
 .sitefoot {
