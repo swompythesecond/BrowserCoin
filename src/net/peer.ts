@@ -14,6 +14,14 @@ import {
   encodeTxMsg,
   type ProtoMsg,
 } from './protocol.js';
+import {
+  decodeHelpersMsg,
+  encodeHelpersMsg,
+  HELPER_DISCOVERY_NETWORK,
+  loadCachedHelperRecords,
+  mergeHelperRecords,
+  saveCachedHelperRecords,
+} from './helperDiscovery.js';
 
 const MAX_PEERS = 8;
 const MIN_PEERS = 3;
@@ -540,6 +548,9 @@ export class PeerNetwork {
       // Ask for more peer IDs so we can broaden the mesh independently of any
       // helper server.
       conn.send({ t: 'getAddrs', max: 32 } satisfies ProtoMsg);
+      // Ask for signed helper candidates too. Peers can only expand our
+      // candidate cache; helper records still need signature/network checks.
+      conn.send({ t: 'getHelpers', max: 50 } satisfies ProtoMsg);
       // Announce our mempool tx hashes to the new peer. Without this, a peer
       // joining 1s after a sender broadcasts never hears about the pending tx
       // and won't include it when it mines. They `getTx` whatever they lack.
@@ -704,6 +715,22 @@ export class PeerNetwork {
           if (this.connections.size < MIN_PEERS) {
             void this.dialFromBootstrap();
           }
+          break;
+        }
+
+        case 'getHelpers': {
+          const max = Math.max(1, Math.min(50, msg.max | 0));
+          try { conn.send(encodeHelpersMsg(loadCachedHelperRecords().slice(0, max))); } catch { /* ignore */ }
+          break;
+        }
+
+        case 'helpers': {
+          const merged = mergeHelperRecords(loadCachedHelperRecords(), decodeHelpersMsg(msg), {
+            nowSeconds: Math.floor(Date.now() / 1000),
+            network: HELPER_DISCOVERY_NETWORK,
+            source: 'peer',
+          });
+          saveCachedHelperRecords(merged.records);
           break;
         }
 

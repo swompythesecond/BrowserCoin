@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { generateKeyPair } from '../crypto/keys.js';
 import { signHelperRecord, type HelperRecord, type HelperRecordUnsigned } from './helperRecords.js';
 import {
+  decodeHelpersMsg,
+  encodeHelpersMsg,
   HELPER_DISCOVERY_NETWORK,
   mergeHelperRecords,
-  selectHelperServers,
   parseHelperResponse,
+  selectHelperServers,
 } from './helperDiscovery.js';
 
 const now = 1_780_000_000;
@@ -114,5 +116,16 @@ describe('helper discovery', () => {
     expect(parsed[0]).toEqual(good);
     expect(parsed).toHaveLength(200);
     expect(parsed.every((entry) => entry.v === 1)).toBe(true);
+  });
+
+  it('round-trips bounded helper gossip records', () => {
+    const records = Array.from({ length: 75 }, (_, i) => rec(`api${i}.gossip.example`));
+
+    const msg = encodeHelpersMsg(records);
+    const decoded = decodeHelpersMsg(msg);
+
+    expect(msg.t).toBe('helpers');
+    expect(msg.records).toHaveLength(50);
+    expect(decoded).toEqual(records.slice(0, 50));
   });
 });

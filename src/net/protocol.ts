@@ -7,6 +7,7 @@
 
 import type { Block } from '../chain/block.js';
 import type { Transaction } from '../chain/transaction.js';
+import type { HelperRecord } from './helperRecords.js';
 import { decodeBlock, encodeBlock } from '../chain/block.js';
 import { decodeTx, encodeTx } from '../chain/transaction.js';
 import { bytesToHex, hexToBytes } from '../util/binary.js';
@@ -27,6 +28,11 @@ export type ProtoMsg =
   // discover peer IDs.
   | { t: 'getAddrs'; max: number }
   | { t: 'addrs'; peers: string[] }
+  // Helper-record gossip — spreads signed API/signaling helper candidates over
+  // existing WebRTC links. Records remain candidates only; local validation in
+  // helperDiscovery/helperRecords decides whether to cache them.
+  | { t: 'getHelpers'; max: number }
+  | { t: 'helpers'; records: HelperRecord[] }
   | { t: 'invBlock'; hash: string; height: number }
   | { t: 'invTx'; hash: string }
   // Batched tx-hash announcement (Bitcoin-style `inv`). Periodic re-broadcast
