@@ -115,6 +115,11 @@ export function decodeHelpersMsg(msg: Extract<ProtoMsg, { t: 'helpers' }>): Help
   return msg.records.slice(0, 50).filter(isHelperRecordShape);
 }
 
+export function helperWellKnownUrl(href: string): string {
+  const url = new URL(href);
+  return `${url.origin}/.well-known/browsercoin/helpers.json`;
+}
+
 export function isHelperRecordShape(value: unknown): value is HelperRecord {
   if (!value || typeof value !== 'object') return false;
   const rec = value as Record<string, unknown>;
