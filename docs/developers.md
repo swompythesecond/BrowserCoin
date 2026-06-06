@@ -30,6 +30,7 @@ Base URL is whichever helper server you point at — local dev is `http://localh
 | GET | `/blocks?fromHeight=&max=` | Canonical blocks oldest-first (max 200) |
 | GET | `/stats` | Network aggregates |
 | GET | `/peers` | Active peer IDs (for WebRTC dial) |
+| GET | `/helpers` | Signed helper records for API/signaling discovery |
 | GET | `/mempool` | Pending tx hex list |
 | POST | `/block` | Submit a block |
 | POST | `/txs` | Submit transactions |
@@ -75,6 +76,18 @@ Up to 64 active peer IDs (last seen ≤ 60s ago). Use these to dial directly ove
 ```bash
 curl http://localhost:9000/peers
 # { "peers": ["peer-abc123", "peer-def456", …] }
+```
+
+### GET `/helpers`
+
+Returns up to 200 signed helper records loaded from the helper server's
+`server/helpers-9000.json` file. Records are discovery hints only. Clients
+verify signature, expiry, network, URL shape, and size bounds before caching or
+using them.
+
+```bash
+curl http://localhost:9000/helpers
+# { "helpers": [{ "v": 1, "network": "browsercoin-pow-v5", … }] }
 ```
 
 ### GET `/mempool`
@@ -224,7 +237,7 @@ You don't need this if you only talk to helper servers over HTTP. If you want to
 1. Register with the PeerJS signaling server to get a peer ID.
 2. `GET /peers` from one or more helper servers.
 3. Dial each peer ID (reliable=true DataChannel).
-4. On open: send `hello`, then `getAddrs` to learn other peers from the mesh.
+4. On open: send `hello`, `getAddrs`, and `getHelpers` to learn peers and helper records from the mesh.
 
 **Messages** (envelope: `{ t: '<type>', ... }`). See `ProtoMsg` in `src/net/protocol.ts`.
 
@@ -238,12 +251,77 @@ You don't need this if you only talk to helper servers over HTTP. If you want to
 | `blocks` | response | `{ data: [<hex>, …] }` (up to 64, height-ascending) |
 | `getAddrs` | request | `{ max }` |
 | `addrs` | response | `{ peers: [<peer-id>, …] }` |
+| `getHelpers` | request | `{ max }` (capped at 50) |
+| `helpers` | response | `{ records: [<helper-record>, …] }` (capped at 50) |
 
 `getHeaders` / `headers` / `invBlock` / `invTx` are reserved for future light-sync work and currently unused.
 
 If the peer's `chainId` ≠ ours, the connection should be closed — that's a different network.
 
-## 8. Run your own helper
+## 8. Dynamic helper discovery
+
+BrowserCoin clients can learn API and PeerJS signaling helpers from signed
+helper records. These records are discovery hints only. A helper can help a
+client find peers and chain data, but it cannot make the browser accept an
+invalid block because all blocks are still validated locally.
+
+Helper records are distributed through layered bootstrap:
+
+1. cached known-good records in the browser
+2. same-origin `/.well-known/browsercoin/helpers.json`
+3. `GET /helpers` from reachable API helpers
+4. WebRTC peer gossip (`getHelpers` / `helpers`)
+5. manual Settings fallback
+
+Record shape:
+
+```json
+{
+  "v": 1,
+  "network": "browsercoin-pow-v5",
+  "roles": ["api", "signaling"],
+  "api": "https://api.example.org",
+  "signaling": "https://peer.example.org",
+  "operator": "<64-char-ed25519-public-key-hex>",
+  "validFrom": 1780000000,
+  "validUntil": 1782592000,
+  "sig": "<128-char-ed25519-signature-hex>"
+}
+```
+
+Operators should keep validity windows at or below 30 days, renew records
+before expiry, and serve only HTTPS public URLs except for localhost
+development. Clients reject expired, wrong-network, malformed, non-HTTPS,
+invalid-signature, and oversized records. Selection also caps concentration by
+operator and registrable domain before falling back to manual/default server
+lists.
+
+To publish helper records from an API helper, place this JSON file beside the
+server data files:
+
+```json
+{
+  "helpers": [
+    {
+      "v": 1,
+      "network": "browsercoin-pow-v5",
+      "roles": ["api", "signaling"],
+      "api": "https://api.example.org",
+      "signaling": "https://peer.example.org",
+      "operator": "<64-char-ed25519-public-key-hex>",
+      "validFrom": 1780000000,
+      "validUntil": 1782592000,
+      "sig": "<128-char-ed25519-signature-hex>"
+    }
+  ]
+}
+```
+
+For the default API port, the filename is `server/helpers-9000.json`. Static
+sites can also publish the same JSON at
+`/.well-known/browsercoin/helpers.json`.
+
+## 9. Run your own helper
 
 The helpers are intentionally pluggable and plural. Run as many as you want; the browser app fans out reads/writes across all configured helpers.
 
@@ -259,7 +337,7 @@ Both helpers persist per-port (`server/chain-9000.json`) — multiple instances 
 
 Neither helper is an authority. Every block they accept is validated by the local `Blockchain` exactly like a peer-relayed block; browsers verify everything themselves anyway. A malicious helper can withhold blocks or txs but cannot trick clients into accepting invalid ones.
 
-## 9. Quickstart for the common cases
+## 10. Quickstart for the common cases
 
 **Build a block explorer.** Poll `GET /tip` every few seconds; on height change, fetch the new blocks with `GET /blocks?fromHeight=`. Decode using the layout in §4. No write access needed.
 
@@ -269,7 +347,7 @@ Neither helper is an authority. Every block they accept is validated by the loca
 
 **Run a stats bot.** Just `GET /stats` on an interval.
 
-## 10. Stability
+## 11. Stability
 
 - This is v0.2. Expect breakage. There is no API versioning header.
 - The CHAIN_ID is the only fork-resistant identifier — any cross-network reuse is rejected at signature-verify time.
