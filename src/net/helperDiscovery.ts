@@ -3,6 +3,7 @@ import {
   isHelperRecordUsable,
   type HelperRecord,
 } from './helperRecords.js';
+import type { ProtoMsg } from './protocol.js';
 
 export const HELPER_DISCOVERY_NETWORK = 'browsercoin-pow-v5';
 
@@ -104,6 +105,14 @@ export function parseHelperResponse(value: unknown): HelperRecord[] {
   const helpers = (value as { helpers?: unknown }).helpers;
   if (!Array.isArray(helpers)) return [];
   return helpers.slice(0, MAX_RECORDS).filter(isHelperRecordShape);
+}
+
+export function encodeHelpersMsg(records: HelperRecord[]): Extract<ProtoMsg, { t: 'helpers' }> {
+  return { t: 'helpers', records: records.slice(0, 50) };
+}
+
+export function decodeHelpersMsg(msg: Extract<ProtoMsg, { t: 'helpers' }>): HelperRecord[] {
+  return msg.records.slice(0, 50).filter(isHelperRecordShape);
 }
 
 export function isHelperRecordShape(value: unknown): value is HelperRecord {
