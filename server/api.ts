@@ -37,6 +37,7 @@ import { Mempool } from '../src/chain/mempool.js';
 import { decodeTx, encodeTx, type Transaction } from '../src/chain/transaction.js';
 import { parsePort } from './lib/cli.js';
 import { parseHelperResponse } from '../src/net/helperDiscovery.js';
+import { BROWSERCOIN_NETWORK } from '../src/net/network.js';
 
 const PORT = parsePort(9000);
 const STALE_PEER_MS = 60_000;
@@ -48,7 +49,7 @@ const STALE_PEER_MS = 60_000;
  * on first startup of the new build instead of trying — and failing — to
  * replay blocks the new validator rejects.
  */
-const CHAIN_VERSION = 'browsercoin-pow-v5';
+const CHAIN_VERSION = BROWSERCOIN_NETWORK;
 /**
  * A miner is "active" if they reported mining=true within this window. Set
  * to 3× the client heartbeat interval (30s) so a single missed heartbeat

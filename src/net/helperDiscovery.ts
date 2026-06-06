@@ -3,9 +3,10 @@ import {
   isHelperRecordUsable,
   type HelperRecord,
 } from './helperRecords.js';
+import { BROWSERCOIN_NETWORK } from './network.js';
 import type { ProtoMsg } from './protocol.js';
 
-export const HELPER_DISCOVERY_NETWORK = 'browsercoin-pow-v5';
+export const HELPER_DISCOVERY_NETWORK = BROWSERCOIN_NETWORK;
 
 const CACHE_KEY = 'browsercoin:helper-records';
 const MAX_RECORDS = 200;
@@ -63,14 +64,24 @@ export function selectHelperServers(records: HelperRecord[], opts: SelectionOpti
   for (const rec of records.sort(compareRecords)) {
     const err = isHelperRecordUsable(rec, { nowSeconds: opts.nowSeconds, network: opts.network });
     if (err) continue;
-    const domain = domainKey(rec.api ?? rec.signaling ?? '');
+    const hasApiRole = rec.roles.includes('api');
+    const hasSignalingRole = rec.roles.includes('signaling');
+    const domain = domainKey((hasApiRole ? rec.api : undefined) ?? (hasSignalingRole ? rec.signaling : undefined) ?? '');
     if ((operatorCount.get(rec.operator) ?? 0) >= maxPerOperator) continue;
     if ((domainCount.get(domain) ?? 0) >= maxPerDomain) continue;
 
+    let selected = false;
+    if (hasApiRole && rec.api && api.length < maxServers) {
+      api.push(rec.api);
+      selected = true;
+    }
+    if (hasSignalingRole && rec.signaling && signaling.length < maxServers) {
+      signaling.push(rec.signaling);
+      selected = true;
+    }
+    if (!selected) continue;
     operatorCount.set(rec.operator, (operatorCount.get(rec.operator) ?? 0) + 1);
     domainCount.set(domain, (domainCount.get(domain) ?? 0) + 1);
-    if (rec.api && api.length < maxServers) api.push(rec.api);
-    if (rec.signaling && signaling.length < maxServers) signaling.push(rec.signaling);
     if (api.length >= maxServers && signaling.length >= maxServers) break;
   }
 

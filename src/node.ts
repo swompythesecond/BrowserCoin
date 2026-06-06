@@ -6,6 +6,7 @@ import { MinerController } from './miner/controller.js';
 import { PeerNetwork } from './net/peer.js';
 import { ServerSync } from './net/serverSync.js';
 import { loadServerLists, saveServerLists, type ServerLists } from './net/servers.js';
+import { BROWSERCOIN_NETWORK } from './net/network.js';
 import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
 import { getAccount } from './chain/state.js';
 import { blockReward, COIN } from './chain/genesis.js';
@@ -28,7 +29,7 @@ import {
  * cleared on next load — stops the browser from trying to restore blocks that
  * the new server will reject. Must stay in lock-step with server/api.ts.
  */
-export const CHAIN_VERSION = 'browsercoin-pow-v5';
+export const CHAIN_VERSION = BROWSERCOIN_NETWORK;
 
 /**
  * Show the sync overlay only when we're this many blocks behind a known tip.
@@ -264,6 +265,7 @@ export class Node {
         this.updateSyncReadiness();
       },
       () => this.miner.getStatus().running,
+      () => this.refreshServerListsFromDiscovery(),
     );
     this.serverSync.onStatus((s) => {
       if (s.reachable > 0 && s.serverHeight > this.syncStatus.targetHeight) {
@@ -439,6 +441,25 @@ export class Node {
     }
   }
 
+  /**
+   * Apply newly cached helper records to live subsystems without saving them as
+   * manual settings. Manual localStorage server lists still win in
+   * loadServerLists(); this only refreshes default-derived sides.
+   */
+  refreshServerListsFromDiscovery(): void {
+    const current = this.serverLists;
+    const next = loadServerLists();
+    const apiChanged = !sameStringList(current.api, next.api);
+    const signalingChanged = !sameStringList(current.signaling, next.signaling);
+    if (!apiChanged && !signalingChanged) return;
+
+    this.serverLists = next;
+    if (apiChanged) this.serverSync?.setApiServers(next.api);
+    if (signalingChanged && this.network) {
+      void this.network.setSignalingServers(next.signaling);
+    }
+  }
+
   setWallet(kp: KeyPair): void {
     this.wallet = kp;
     saveWallet(kp);
@@ -520,6 +541,10 @@ export class Node {
     };
     for (const fn of this.blockMinedListeners) fn(info);
   }
+}
+
+function sameStringList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
 }
 
 /** Parse a user-entered BRC amount ("12.5") into wei (bigint). */

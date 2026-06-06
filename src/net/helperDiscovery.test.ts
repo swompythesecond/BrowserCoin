@@ -134,6 +134,27 @@ describe('helper discovery', () => {
     expect(selected.api.filter((url) => url.endsWith('example.org')).length).toBe(1);
   });
 
+  it('only selects helper URLs for roles the record advertises', () => {
+    const apiOnly = rec('api.role.example', {
+      roles: ['api'],
+      signaling: 'https://peer.role.example',
+    });
+    const signalingOnly = rec('peer.role.example', {
+      roles: ['signaling'],
+      api: 'https://api.not-advertised.example',
+      signaling: 'https://peer.advertised.example',
+    });
+
+    const selected = selectHelperServers([apiOnly, signalingOnly], {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      maxServers: 8,
+    });
+
+    expect(selected.api).toEqual(['https://api.role.example']);
+    expect(selected.signaling).toEqual(['https://peer.advertised.example']);
+  });
+
   it('falls back to supplied defaults when no records are usable', () => {
     const selected = selectHelperServers([], {
       nowSeconds: now,
