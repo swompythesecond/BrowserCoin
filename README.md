@@ -42,7 +42,7 @@ Per-block ASERT retargeting is what lets the chain self-calibrate to the very vo
 - **Account model** (Ethereum-style: `{balance, nonce}` per address) — smaller state than UTXO, browser-friendly.
 - **Ed25519** signatures (`@noble/ed25519`) — fast, deterministic, audited.
 - **Argon2id PoW** (32 MB, 1 iteration, memory-hard) mined in a Web Worker so the UI stays smooth. RAM-bandwidth bottleneck — closest browser-friendly analogue to ASIC resistance.
-- **PeerJS / WebRTC** peer-to-peer. Helper services are split: `server/api.ts` (chain backup + peer discovery) and `server/peerjs.ts` (signaling) run as independent processes so they can fail independently. Both lists are configurable in-app; anyone can run their own and add it.
+- **PeerJS / WebRTC** peer-to-peer. Helper services are split: `server/api.ts` (chain backup + peer discovery) and `server/peerjs.ts` (signaling) run as independent processes so they can fail independently. Both lists are configurable in-app; clients can also learn signed helper records from cache, same-origin `.well-known`, API helpers, and peers.
 - **IndexedDB** for chain state, **localStorage** for the wallet keypair.
 - **Vanilla TypeScript + Vite** — no React, no framework runtime. Tiny bundle, hash-routed SPA shell.
 
@@ -64,7 +64,7 @@ npm run dev            # → http://localhost:5173
 
 Open the URL. You'll get an auto-generated wallet, hit **Start mining** on the Mine tab, and watch blocks appear. Open the same URL in a second browser (or incognito) and they'll discover each other via the helper servers and start gossiping blocks.
 
-The two helpers run as independent processes — kill one and the other keeps working. Either is optional: once two browsers have formed a direct WebRTC connection they keep gossiping even if both helpers die.
+The two helpers run as independent processes — kill one and the other keeps working. Either is optional: once two browsers have formed a direct WebRTC connection they keep gossiping even if both helpers die. Helper discovery is layered like Bitcoin's cached peers, seed discovery, and address gossip: bootstrap sources help find the network, but local validation decides chain validity.
 
 ## Scripts
 
@@ -141,7 +141,7 @@ Build wallets, block explorers, or bots against any BrowserCoin helper server. T
 
 - **This is an experiment, not a financial instrument.** Don't put real value on the chain.
 - BRC has no fiat market. The 21M-supply cap exists because the rules are Bitcoin-shaped, not because the token is scarce in any meaningful economic sense.
-- **Helper servers are pluggable and plural.** Both the HTTP API and PeerJS signaling are independent services, each with its own URL list under **Settings → Helper servers**. Reads try every server in health order; writes fan out to all of them. As long as one of either kind is reachable, new browsers can join. Anyone can run their own with `npm run server:api` and/or `npm run server:peerjs` and add the URL to the list.
+- **Helper servers are pluggable and plural.** Both the HTTP API and PeerJS signaling are independent services, each with its own URL list under **Settings → Helper servers**. Reads try every server in health order; writes fan out to all of them. As long as one of either kind is reachable, new browsers can join. Anyone can run their own with `npm run server:api` and/or `npm run server:peerjs`, publish signed helper records, or add URLs manually.
 
 ## License
 
