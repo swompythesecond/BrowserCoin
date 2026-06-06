@@ -455,7 +455,7 @@ export class Node {
 
     this.serverLists = next;
     if (apiChanged) this.serverSync?.setApiServers(next.api);
-    if (signalingChanged && this.network) {
+    if (signalingChanged && this.network && this.network.getStatus().connected === 0) {
       void this.network.setSignalingServers(next.signaling);
     }
   }

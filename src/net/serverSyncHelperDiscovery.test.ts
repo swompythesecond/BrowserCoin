@@ -81,6 +81,56 @@ describe('ServerSync helper discovery', () => {
     expect(loadCachedHelperRecords()).toEqual([discovered]);
   });
 
+  it('does not let one hanging API helper block helper discovery', async () => {
+    const discovered = helper('api.timeout.example');
+    vi.stubGlobal('fetch', vi.fn((url: string | URL) => {
+      const u = new URL(url.toString());
+      if (u.origin === 'https://hang.example') return new Promise(() => {});
+      return Promise.resolve({ ok: true, json: async () => ({ helpers: [discovered] }) });
+    }));
+    const sync = new ServerSync(
+      {} as never,
+      {} as never,
+      ['https://good.example', 'https://hang.example'],
+      () => {},
+      () => false,
+      () => {},
+      10,
+    );
+
+    const result = await Promise.race([
+      sync.pullHelperRecords().then(() => 'done'),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 100)),
+    ]);
+
+    expect(result).toBe('done');
+    expect(loadCachedHelperRecords()).toEqual([discovered]);
+  });
+
+  it('keeps later-source helper records when an earlier source returns many records', async () => {
+    const spam = Array.from({ length: 200 }, (_, i) => helper(`api${i}.evil.example`));
+    const honest = helper('api.honest.example');
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
+      const u = new URL(url.toString());
+      return {
+        ok: true,
+        json: async () => ({
+          helpers: u.origin === 'https://evil.example' ? spam : [honest],
+        }),
+      };
+    }));
+    const sync = new ServerSync(
+      {} as never,
+      {} as never,
+      ['https://evil.example', 'https://honest.example'],
+      () => {},
+    );
+
+    await sync.pullHelperRecords();
+
+    expect(loadCachedHelperRecords().some((record) => record.api === 'https://api.honest.example')).toBe(true);
+  });
+
   it('notifies when helper records are merged so owners can apply live server lists', () => {
     const discovered = helper('api.notify.example');
     let notifications = 0;

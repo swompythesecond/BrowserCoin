@@ -57,31 +57,41 @@ export function selectHelperServers(records: HelperRecord[], opts: SelectionOpti
   const maxPerDomain = opts.maxPerDomain ?? 2;
   const maxServers = opts.maxServers ?? 8;
   const operatorCount = new Map<string, number>();
-  const domainCount = new Map<string, number>();
+  const apiDomainCount = new Map<string, number>();
+  const signalingDomainCount = new Map<string, number>();
   const api: string[] = [];
   const signaling: string[] = [];
+  const seenApi = new Set<string>();
+  const seenSignaling = new Set<string>();
 
   for (const rec of records.sort(compareRecords)) {
     const err = isHelperRecordUsable(rec, { nowSeconds: opts.nowSeconds, network: opts.network });
     if (err) continue;
     const hasApiRole = rec.roles.includes('api');
     const hasSignalingRole = rec.roles.includes('signaling');
-    const domain = domainKey((hasApiRole ? rec.api : undefined) ?? (hasSignalingRole ? rec.signaling : undefined) ?? '');
     if ((operatorCount.get(rec.operator) ?? 0) >= maxPerOperator) continue;
-    if ((domainCount.get(domain) ?? 0) >= maxPerDomain) continue;
 
     let selected = false;
-    if (hasApiRole && rec.api && api.length < maxServers) {
-      api.push(rec.api);
-      selected = true;
+    if (hasApiRole && rec.api && api.length < maxServers && !seenApi.has(rec.api)) {
+      const domain = domainKey(rec.api);
+      if ((apiDomainCount.get(domain) ?? 0) < maxPerDomain) {
+        seenApi.add(rec.api);
+        apiDomainCount.set(domain, (apiDomainCount.get(domain) ?? 0) + 1);
+        api.push(rec.api);
+        selected = true;
+      }
     }
-    if (hasSignalingRole && rec.signaling && signaling.length < maxServers) {
-      signaling.push(rec.signaling);
-      selected = true;
+    if (hasSignalingRole && rec.signaling && signaling.length < maxServers && !seenSignaling.has(rec.signaling)) {
+      const domain = domainKey(rec.signaling);
+      if ((signalingDomainCount.get(domain) ?? 0) < maxPerDomain) {
+        seenSignaling.add(rec.signaling);
+        signalingDomainCount.set(domain, (signalingDomainCount.get(domain) ?? 0) + 1);
+        signaling.push(rec.signaling);
+        selected = true;
+      }
     }
     if (!selected) continue;
     operatorCount.set(rec.operator, (operatorCount.get(rec.operator) ?? 0) + 1);
-    domainCount.set(domain, (domainCount.get(domain) ?? 0) + 1);
     if (api.length >= maxServers && signaling.length >= maxServers) break;
   }
 
