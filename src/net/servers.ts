@@ -1,3 +1,9 @@
+import {
+  HELPER_DISCOVERY_NETWORK,
+  loadCachedHelperRecords,
+  selectHelperServers,
+} from './helperDiscovery.js';
+
 /**
  * Multi-server helper configuration. Replaces the legacy single-bootstrap-URL
  * model with two independent lists:
@@ -112,10 +118,15 @@ export function loadServerLists(): ServerLists {
     return lists;
   }
 
-  // No persisted config — fall back to hardcoded defaults.
+  // No complete persisted config — try dynamic helper records before hardcoded defaults.
+  const discovered = selectHelperServers(loadCachedHelperRecords(), {
+    nowSeconds: Math.floor(Date.now() / 1000),
+    network: HELPER_DISCOVERY_NETWORK,
+    defaults: defaultServerLists(),
+  });
   return {
-    api: api ?? defaultServerLists().api,
-    signaling: sig ?? defaultServerLists().signaling,
+    api: api ?? discovered.api,
+    signaling: sig ?? discovered.signaling,
   };
 }
 
