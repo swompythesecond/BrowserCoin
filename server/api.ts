@@ -101,6 +101,10 @@ const mempool = new Mempool();
 chain.onTipChanged(({ confirmed, restored }) => {
   for (const tx of restored) mempool.add(tx, chain.tipState);
   mempool.removeMany(confirmed);
+  // Drop txs that can't be mined against the new tip (consumed nonce, nonce
+  // gap, or overdraw) so the server stops serving wedged txs via GET /mempool
+  // and doesn't re-seed them to clients that bootstrap from it.
+  mempool.pruneUnminable(chain.tipState);
 });
 /** Orphan blocks (parent unknown) keyed by their parent hash hex. */
 const orphans = new Map<string, Block>();

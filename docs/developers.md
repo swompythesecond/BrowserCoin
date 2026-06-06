@@ -154,6 +154,16 @@ Validation rules a sender must respect:
 
 (Source: `validateTxStructure` in `src/chain/transaction.ts` and `Mempool.add` in `src/chain/mempool.ts`.)
 
+**Mempool eviction.** Admission is necessary but not sufficient to ever be mined. On every
+tip change the pool runs `Mempool.pruneUnminable`, which discards txs that can't be mined
+against the current tip: a consumed nonce slot, a **nonce gap** (a missing lower nonce blocks
+the whole run), or an **overdraw** (a sender queues more than its balance can fund). Anything
+older than `MEMPOOL_TX_TTL_MS` (30 min) is reaped as a backstop. So "pending" always means
+"actually mineable." Batch senders (e.g. a faucet) must therefore assign **strictly sequential
+nonces** — derive the next nonce from the on-chain nonce plus your own pending count, as
+`Mempool.nextNonceFor` does (`src/chain/mempool.ts`) — and keep the funding account solvent for
+the whole batch, or the tail will be evicted instead of mined.
+
 ## 4. Block wire format
 
 A block is `148 + 4 + 152·N` bytes: header, tx count (u32), N transactions. See `src/chain/block.ts`.

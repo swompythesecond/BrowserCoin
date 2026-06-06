@@ -143,10 +143,10 @@ export class Node {
       this.activityIndex.apply(delta);
       for (const tx of delta.restored) this.mempool.add(tx, this.chain.tipState);
       this.mempool.removeMany(delta.confirmed);
-      // Evict txs whose nonce slot was just taken by a confirmed tx — they can
-      // never be mined now, so they shouldn't keep showing as pending or block
-      // the per-sender nonce walk in selectForBlock.
-      this.mempool.pruneStale(this.chain.tipState);
+      // Evict txs that can't be mined against the new tip — a consumed nonce
+      // slot, a nonce gap, or an overdraw — so they don't keep showing as
+      // pending or wedge the per-sender walk in selectForBlock.
+      this.mempool.pruneUnminable(this.chain.tipState);
       this.miner.refresh();
       this.emitChain();
     });

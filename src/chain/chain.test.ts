@@ -284,8 +284,8 @@ describe('mempool', () => {
     expect(await chain.addBlock(await buildBlock(chain, alice.publicKey, [confirmed]))).toBeNull();
     expect(getAccount(chain.tipState, alice.address).nonce).toBe(1);
 
-    // The still-pending nonce-0 tx is now dead; pruneStale evicts it.
-    expect(mp.pruneStale(chain.tipState)).toBe(1);
+    // The still-pending nonce-0 tx is now dead; pruneUnminable evicts it.
+    expect(mp.pruneUnminable(chain.tipState)).toBe(1);
     expect(mp.size()).toBe(0);
   });
 });

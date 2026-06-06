@@ -80,6 +80,14 @@ export const MAX_MEMPOOL_TXS = 5_000;
 export const MIN_FEE_PER_BYTE = 1n;
 
 /**
+ * Drop pending txs older than this — a backstop so a wedged or abandoned tx
+ * (e.g. a nonce-gapped sender whose missing predecessor never arrives) can't
+ * pin the pool and masquerade as "pending" forever. Provably-unminable txs are
+ * evicted sooner (see `Mempool.pruneUnminable`); this catches everything else.
+ */
+export const MEMPOOL_TX_TTL_MS = 30 * 60 * 1000; // 30 min
+
+/**
  * Initial difficulty target = the difficulty floor. ASERT can move target
  * up (harder) but never above this value, so any miner that can mine block 1
  * can also mine at the floor — the chain can't deadlock on hashrate loss.

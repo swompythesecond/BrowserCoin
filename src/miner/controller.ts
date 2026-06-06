@@ -546,7 +546,7 @@ export class MinerController {
 
     // Reserve a safety margin under the block-size cap.
     const budget = MAX_BLOCK_BYTES - 1024;
-    const txs = this.mempool.selectForBlock(this.chain.tipState, budget);
+    let txs = this.mempool.selectForBlock(this.chain.tipState, budget);
 
     // Surface the "pool full but blocks empty" class of bug instead of letting
     // it pass silently — if we have pending txs but selected none, every
@@ -559,12 +559,21 @@ export class MinerController {
     }
 
     // Simulate apply against tip state to derive stateRoot.
-    const sim = cloneState(this.chain.tipState);
-    const err = applyBlockTxs(sim, height, this.minerAddress, txs);
+    let sim = cloneState(this.chain.tipState);
+    let err = applyBlockTxs(sim, height, this.minerAddress, txs);
     if (err) {
-      // Should never happen — selectForBlock already filtered. Skip these txs.
-      this.currentTemplate = null;
-      return;
+      // selectForBlock is balance- and nonce-aware, so a selected set should
+      // always apply. If an edge case ever slips through, mine an empty block
+      // rather than blank the template — a null template silently stops this
+      // node from producing ANY blocks, which is far worse than skipping a few txs.
+      console.warn(`[miner] selected txs failed to apply (${err}) — falling back to an empty block`);
+      txs = [];
+      sim = cloneState(this.chain.tipState);
+      err = applyBlockTxs(sim, height, this.minerAddress, txs); // empty set always applies
+      if (err) {
+        this.currentTemplate = null;
+        return;
+      }
     }
     const sRoot = stateRoot(sim);
     const tRoot = computeTxRoot(txs);

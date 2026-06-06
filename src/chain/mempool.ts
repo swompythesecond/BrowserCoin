@@ -1,5 +1,5 @@
 import { bytesToHex } from '../util/binary.js';
-import { MAX_MEMPOOL_TXS, MIN_FEE_PER_BYTE } from './genesis.js';
+import { MAX_MEMPOOL_TXS, MEMPOOL_TX_TTL_MS, MIN_FEE_PER_BYTE, TARGET_BLOCK_TIME_S } from './genesis.js';
 import { getAccount, type State } from './state.js';
 import {
   TX_ENCODED_LEN,
@@ -7,6 +7,15 @@ import {
   validateTxStructure,
   type Transaction,
 } from './transaction.js';
+
+/**
+ * Grace before evicting a provably-unminable (nonce-gapped or unfundable) tx,
+ * so a predecessor still propagating isn't dropped on a tip change that happens
+ * to land in the gap. One block target is ample — the `+16` nonce-ahead window
+ * already bounds how far a gap can run. Does NOT apply to nonce-too-low txs:
+ * their slot is already consumed, so they're evicted immediately.
+ */
+const UNMINABLE_GRACE_MS = TARGET_BLOCK_TIME_S * 1000;
 
 /** Per-tx entry — keyed by tx hash hex. */
 interface MempoolEntry {
@@ -119,17 +128,72 @@ export class Mempool {
   }
 
   /**
-   * Drop txs that can no longer be mined against `state` — a different tx has
-   * already taken their nonce slot (`tx.nonce < sender.nonce`). That slot is
-   * consumed forever, so the tx is dead weight. Called on every tip change so
-   * "pending" always means "actually mineable" and a wedged pool self-heals.
+   * Split one sender's pooled entries into the prefix that can actually be mined
+   * against `state` and the rest (dead weight). A tx is mineable only if its
+   * nonce continues the sequence from the on-chain nonce AND the sender's running
+   * balance still covers `amount + fee`. The first tx that gaps the nonce or
+   * overdraws the balance stops the walk — nothing behind it can apply either, so
+   * the entire tail is unminable from this tip. Mirrors what block validation
+   * (`applyTx`) enforces, so a kept set never makes `applyBlockTxs` fail.
+   */
+  private mineablePrefix(
+    state: State,
+    senderHex: string,
+    entries: MempoolEntry[],
+  ): { keep: MempoolEntry[]; drop: MempoolEntry[] } {
+    const sorted = [...entries].sort((a, b) => a.tx.nonce - b.tx.nonce);
+    const acct = getAccount(state, senderHex);
+    let expected = acct.nonce;
+    let balance = acct.balance;
+    let i = 0;
+    for (; i < sorted.length; i++) {
+      const e = sorted[i]!;
+      const cost = e.tx.amount + e.tx.fee;
+      if (e.tx.nonce !== expected || balance < cost) break;
+      balance -= cost;
+      expected += 1;
+    }
+    return { keep: sorted.slice(0, i), drop: sorted.slice(i) };
+  }
+
+  /**
+   * Drop every pooled tx that can't be mined against `state`, so "pending"
+   * always means "actually mineable" and a wedged pool self-heals on each tip
+   * change. Covers:
+   *   - nonce too low: the slot was consumed by a confirmed tx — dead forever,
+   *     evicted immediately;
+   *   - nonce-gapped or unfundable: no contiguous, affordable path from the
+   *     on-chain nonce (see `mineablePrefix`). Evicted once it has sat past
+   *     `UNMINABLE_GRACE_MS`, so a predecessor still propagating isn't dropped
+   *     prematurely;
+   *   - older than `MEMPOOL_TX_TTL_MS`: backstop for anything abandoned.
    * Returns the number of entries removed.
    */
-  pruneStale(state: State): number {
+  pruneUnminable(state: State, now = Date.now()): number {
     let removed = 0;
+    const bySender = new Map<string, MempoolEntry[]>();
+    for (const e of this.entries.values()) {
+      const k = bytesToHex(e.tx.from);
+      if (!bySender.has(k)) bySender.set(k, []);
+      bySender.get(k)!.push(e);
+    }
+    for (const [sender, list] of bySender) {
+      const senderNonce = getAccount(state, sender).nonce;
+      const { drop } = this.mineablePrefix(state, sender, list);
+      for (const e of drop) {
+        // nonce-too-low → slot consumed, never minable → drop now; otherwise
+        // (gap/overdraw) give a predecessor or incoming funds a grace window.
+        const dead = e.tx.nonce < senderNonce;
+        if (dead || now - e.receivedAt >= UNMINABLE_GRACE_MS) {
+          this.entries.delete(e.hashHex);
+          removed++;
+        }
+      }
+    }
+    // TTL backstop: evict anything stale regardless of why (e.g. a tx still
+    // inside the grace window above but simply abandoned by its sender).
     for (const e of [...this.entries.values()]) {
-      const sender = getAccount(state, bytesToHex(e.tx.from));
-      if (e.tx.nonce < sender.nonce) {
+      if (now - e.receivedAt >= MEMPOOL_TX_TTL_MS) {
         this.entries.delete(e.hashHex);
         removed++;
       }
@@ -138,9 +202,9 @@ export class Mempool {
   }
 
   /**
-   * Pick a set of txs to include in the next block. Walks each sender in nonce
-   * order (lowest nonce first), then sorts the resulting eligible set by fee-per-byte.
-   * Caps to `maxBytes` total.
+   * Pick a set of txs to include in the next block. Walks each sender's mineable
+   * prefix (contiguous, fundable nonces from the on-chain nonce), then sorts the
+   * resulting eligible set by fee-per-byte. Caps to `maxBytes` total.
    */
   selectForBlock(state: State, maxBytes: number): Transaction[] {
     // Group by sender.
@@ -153,16 +217,8 @@ export class Mempool {
 
     const eligible: MempoolEntry[] = [];
     for (const [sender, list] of bySender) {
-      list.sort((a, b) => a.tx.nonce - b.tx.nonce);
-      let expected = getAccount(state, sender).nonce;
-      for (const e of list) {
-        if (e.tx.nonce === expected) {
-          eligible.push(e);
-          expected += 1;
-        } else {
-          break; // gap — stop adding for this sender
-        }
-      }
+      // Only a sender's contiguous, fundable prefix can be mined from this tip.
+      eligible.push(...this.mineablePrefix(state, sender, list).keep);
     }
 
     // Now greedily pack by fee-per-byte (preserve sender-internal order via stable sort).
