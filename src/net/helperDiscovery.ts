@@ -10,6 +10,7 @@ export const HELPER_DISCOVERY_NETWORK = BROWSERCOIN_NETWORK;
 
 const CACHE_KEY = 'browsercoin:helper-records';
 const MAX_RECORDS = 200;
+const MAX_RESPONSE_ITEMS = 1_000;
 
 export interface MergeOptions {
   nowSeconds: number;
@@ -125,7 +126,13 @@ export function parseHelperResponse(value: unknown): HelperRecord[] {
   if (!value || typeof value !== 'object') return [];
   const helpers = (value as { helpers?: unknown }).helpers;
   if (!Array.isArray(helpers)) return [];
-  return helpers.slice(0, MAX_RECORDS).filter(isHelperRecordShape);
+  const records: HelperRecord[] = [];
+  for (const entry of helpers.slice(0, MAX_RESPONSE_ITEMS)) {
+    if (!isHelperRecordShape(entry)) continue;
+    records.push(entry);
+    if (records.length >= MAX_RECORDS) break;
+  }
+  return records;
 }
 
 export function encodeHelpersMsg(records: HelperRecord[]): Extract<ProtoMsg, { t: 'helpers' }> {
