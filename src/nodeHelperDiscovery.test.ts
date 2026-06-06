@@ -61,6 +61,7 @@ describe('Node helper discovery live application', () => {
       setApiServers: (urls: string[]) => { apiUpdates.push(urls); },
     } as never;
     node.network = {
+      getStatus: () => ({ connected: 0 }),
       setSignalingServers: async (urls: string[]) => { signalingUpdates.push(urls); },
     } as never;
 
@@ -77,5 +78,25 @@ describe('Node helper discovery live application', () => {
     expect(signalingUpdates).toEqual([['https://peer.live.example']]);
     expect(storage.getItem('browsercoin:api-servers')).toBeNull();
     expect(storage.getItem('browsercoin:signaling-servers')).toBeNull();
+  });
+
+  it('does not tear down live P2P connections for newly discovered signaling helpers', () => {
+    const node = new Node();
+    const signalingUpdates: string[][] = [];
+    node.serverSync = {
+      setApiServers: () => {},
+    } as never;
+    node.network = {
+      getStatus: () => ({ connected: 2 }),
+      setSignalingServers: async (urls: string[]) => { signalingUpdates.push(urls); },
+    } as never;
+
+    saveCachedHelperRecords([
+      helper('https://api.live.example', 'https://peer.blackhole.example'),
+    ]);
+    node.refreshServerListsFromDiscovery();
+
+    expect(node.serverLists.signaling).toEqual(['https://peer.blackhole.example']);
+    expect(signalingUpdates).toEqual([]);
   });
 });

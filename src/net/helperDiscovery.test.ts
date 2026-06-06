@@ -155,6 +155,22 @@ describe('helper discovery', () => {
     expect(selected.signaling).toEqual(['https://peer.advertised.example']);
   });
 
+  it('dedupes signaling URLs and caps signaling domains independently from API domains', () => {
+    const records = Array.from({ length: 8 }, (_, i) => rec(`api${i}.unique${i}.example`, {
+      signaling: 'https://peer.same.example',
+    }));
+
+    const selected = selectHelperServers(records, {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      maxPerDomain: 1,
+      maxServers: 8,
+    });
+
+    expect(selected.api).toHaveLength(8);
+    expect(selected.signaling).toEqual(['https://peer.same.example']);
+  });
+
   it('falls back to supplied defaults when no records are usable', () => {
     const selected = selectHelperServers([], {
       nowSeconds: now,

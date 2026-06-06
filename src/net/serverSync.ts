@@ -17,6 +17,9 @@ import { helperRecordHash, type HelperRecord } from './helperRecords.js';
 
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
+const REQUEST_TIMEOUT_MS = 8_000;
+const HELPER_RECORDS_PER_API_SOURCE = 50;
+const MAX_HELPER_RECORDS_PER_PULL = 200;
 /** Background safety re-sync when we're totally isolated from peers. */
 const ISOLATED_POLL_MS = 10_000;
 /**
@@ -113,6 +116,8 @@ export class ServerSync {
     private isMining: () => boolean = () => false,
     /** Called after helper discovery changes the cached server candidates. */
     private onHelperRecordsChanged: () => void = () => {},
+    /** Per-request timeout so one stalled helper cannot block multi-helper fan-in. */
+    private requestTimeoutMs = REQUEST_TIMEOUT_MS,
   ) {
     this.status.total = apiServers.length;
   }
@@ -261,9 +266,15 @@ export class ServerSync {
     // Read stats from each server, take max.
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
-        const r = await fetch(new URL('/stats', base).toString());
-        if (!r.ok) return null;
-        return (await r.json()) as { peerCount: number; minersActive?: number };
+        try {
+          const r = await this.fetchWithTimeout(new URL('/stats', base).toString());
+          if (!r.ok) { noteFailure(base); return null; }
+          noteSuccess(base);
+          return (await r.json()) as { peerCount: number; minersActive?: number };
+        } catch {
+          noteFailure(base);
+          return null;
+        }
       }),
     );
     let peerCount = 0;
@@ -288,10 +299,16 @@ export class ServerSync {
     if (this.apiServers.length === 0) return [];
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
-        const r = await fetch(new URL('/peers', base).toString());
-        if (!r.ok) return [] as string[];
-        const body = (await r.json()) as { peers?: string[] };
-        return body.peers ?? [];
+        try {
+          const r = await this.fetchWithTimeout(new URL('/peers', base).toString());
+          if (!r.ok) { noteFailure(base); return [] as string[]; }
+          const body = (await r.json()) as { peers?: string[] };
+          noteSuccess(base);
+          return body.peers ?? [];
+        } catch {
+          noteFailure(base);
+          return [] as string[];
+        }
       }),
     );
     const seen = new Set<string>();
@@ -314,12 +331,12 @@ export class ServerSync {
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
         try {
-          const r = await fetch(new URL('/helpers', base).toString());
+          const r = await this.fetchWithTimeout(new URL('/helpers', base).toString());
           if (!r.ok) {
             noteFailure(base);
             return [] as HelperRecord[];
           }
-          const records = parseHelperResponse(await r.json());
+          const records = parseHelperResponse(await r.json()).slice(0, HELPER_RECORDS_PER_API_SOURCE);
           noteSuccess(base);
           return records;
         } catch {
@@ -328,7 +345,10 @@ export class ServerSync {
         }
       }),
     );
-    const records = all.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+    const records = interleaveHelperRecordSources(
+      all.map((r) => (r.status === 'fulfilled' ? r.value : [])),
+      MAX_HELPER_RECORDS_PER_PULL,
+    );
     this.ingestHelperRecords(records, 'api');
   }
 
@@ -356,13 +376,32 @@ export class ServerSync {
     }
 
     try {
-      const r = await fetch(url);
+      const r = await this.fetchWithTimeout(url);
       if (!r.ok) return;
       const records = parseHelperResponse(await r.json());
       if (records.length === 0) return;
       this.ingestHelperRecords(records, 'well-known');
     } catch {
       return;
+    }
+  }
+
+  private async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const timeout = new Promise<Response>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('request timeout'));
+        }, this.requestTimeoutMs);
+      });
+      return await Promise.race([
+        fetch(url, { ...init, signal: controller.signal }),
+        timeout,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -427,7 +466,7 @@ export class ServerSync {
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
         try {
-          const r = await fetch(new URL('/tip', base).toString());
+          const r = await this.fetchWithTimeout(new URL('/tip', base).toString());
           if (!r.ok) { noteFailure(base); return null; }
           const v = (await r.json()) as { height: number; tipHash: string };
           noteSuccess(base);
@@ -585,4 +624,20 @@ function sameHelperRecordSet(a: HelperRecord[], b: HelperRecord[]): boolean {
   const aHashes = a.map(helperRecordHash).sort();
   const bHashes = b.map(helperRecordHash).sort();
   return aHashes.every((hash, i) => hash === bHashes[i]);
+}
+
+function interleaveHelperRecordSources(sources: HelperRecord[][], max: number): HelperRecord[] {
+  const out: HelperRecord[] = [];
+  for (let i = 0; out.length < max; i++) {
+    let added = false;
+    for (const source of sources) {
+      const rec = source[i];
+      if (!rec) continue;
+      out.push(rec);
+      added = true;
+      if (out.length >= max) break;
+    }
+    if (!added) break;
+  }
+  return out;
 }
