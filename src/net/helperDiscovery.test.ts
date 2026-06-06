@@ -1,16 +1,54 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { generateKeyPair } from '../crypto/keys.js';
 import { signHelperRecord, type HelperRecord, type HelperRecordUnsigned } from './helperRecords.js';
+import { ServerSync } from './serverSync.js';
 import {
   decodeHelpersMsg,
   encodeHelpersMsg,
   HELPER_DISCOVERY_NETWORK,
+  helperWellKnownUrl,
+  loadCachedHelperRecords,
   mergeHelperRecords,
   parseHelperResponse,
   selectHelperServers,
 } from './helperDiscovery.js';
 
 const now = 1_780_000_000;
+
+class MemoryStorage {
+  private values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+}
+
+const storage = new MemoryStorage();
+const originalLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+const originalFetch = globalThis.fetch;
+
+Object.defineProperty(globalThis, 'localStorage', {
+  value: storage,
+  configurable: true,
+});
+
+function restoreGlobalTestState(): void {
+  storage.clear();
+  if (originalLocation) Object.defineProperty(globalThis, 'location', originalLocation);
+  else Reflect.deleteProperty(globalThis, 'location');
+  Object.defineProperty(globalThis, 'fetch', {
+    value: originalFetch,
+    configurable: true,
+  });
+}
 
 function rec(host: string, overrides: Partial<HelperRecordUnsigned> = {}): HelperRecord {
   const kp = generateKeyPair();
@@ -42,6 +80,9 @@ function recFromOperator(host: string, operator: ReturnType<typeof generateKeyPa
 }
 
 describe('helper discovery', () => {
+  beforeEach(() => storage.clear());
+  afterEach(() => restoreGlobalTestState());
+
   it('dedupes records by signature hash and rejects unusable records', () => {
     const good = rec('api1.example.org');
     const expired = rec('api2.example.org', { validUntil: now - 1 });
@@ -127,5 +168,40 @@ describe('helper discovery', () => {
     expect(msg.t).toBe('helpers');
     expect(msg.records).toHaveLength(50);
     expect(decoded).toEqual(records.slice(0, 50));
+  });
+
+  it('builds same-origin well-known helper URL', () => {
+    expect(helperWellKnownUrl('https://browsercoin.org/app/#/network')).toBe(
+      'https://browsercoin.org/.well-known/browsercoin/helpers.json',
+    );
+  });
+
+  it('pulls same-origin well-known helper records into the cache', async () => {
+    const current = Math.floor(Date.now() / 1000);
+    const incoming = rec('api.wellknown.example', {
+      validFrom: current - 60,
+      validUntil: current + 3600,
+    });
+    const requests: string[] = [];
+    Object.defineProperty(globalThis, 'location', {
+      value: { href: 'https://browsercoin.org/app/#/network' },
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, 'fetch', {
+      value: async (url: string | URL) => {
+        requests.push(String(url));
+        return {
+          ok: true,
+          json: async () => ({ helpers: [incoming] }),
+        };
+      },
+      configurable: true,
+    });
+    const sync = new ServerSync({} as never, {} as never, [], () => {});
+
+    await sync.pullWellKnownHelperRecords();
+
+    expect(requests).toEqual(['https://browsercoin.org/.well-known/browsercoin/helpers.json']);
+    expect(loadCachedHelperRecords()).toEqual([incoming]);
   });
 });
