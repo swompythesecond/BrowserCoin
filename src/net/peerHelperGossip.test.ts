@@ -56,10 +56,9 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 });
 
-const now = 1_780_000_000;
-
 function helper(host: string): HelperRecord {
   const kp = generateKeyPair();
+  const now = Math.floor(Date.now() / 1000);
   const unsigned: HelperRecordUnsigned = {
     v: 1,
     network: HELPER_DISCOVERY_NETWORK,

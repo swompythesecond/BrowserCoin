@@ -17,10 +17,7 @@ import {
 import {
   decodeHelpersMsg,
   encodeHelpersMsg,
-  HELPER_DISCOVERY_NETWORK,
   loadCachedHelperRecords,
-  mergeHelperRecords,
-  saveCachedHelperRecords,
 } from './helperDiscovery.js';
 
 const MAX_PEERS = 8;
@@ -725,12 +722,7 @@ export class PeerNetwork {
         }
 
         case 'helpers': {
-          const merged = mergeHelperRecords(loadCachedHelperRecords(), decodeHelpersMsg(msg), {
-            nowSeconds: Math.floor(Date.now() / 1000),
-            network: HELPER_DISCOVERY_NETWORK,
-            source: 'peer',
-          });
-          saveCachedHelperRecords(merged.records);
+          this.serverSync.ingestHelperRecords(decodeHelpersMsg(msg), 'peer');
           break;
         }
 

@@ -13,6 +13,7 @@ import {
   parseHelperResponse,
   saveCachedHelperRecords,
 } from './helperDiscovery.js';
+import { helperRecordHash, type HelperRecord } from './helperRecords.js';
 
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
@@ -110,6 +111,8 @@ export class ServerSync {
      * non-mining node only pulls when it has no P2P peers to learn txs from.
      */
     private isMining: () => boolean = () => false,
+    /** Called after helper discovery changes the cached server candidates. */
+    private onHelperRecordsChanged: () => void = () => {},
   ) {
     this.status.total = apiServers.length;
   }
@@ -308,18 +311,38 @@ export class ServerSync {
 
   async pullHelperRecords(): Promise<void> {
     if (this.apiServers.length === 0) return;
-    const records = await tryRead(
-      this.apiServers,
-      '/helpers',
-      async (r) => parseHelperResponse(await r.json()),
+    const all = await Promise.allSettled(
+      this.apiServers.map(async (base) => {
+        try {
+          const r = await fetch(new URL('/helpers', base).toString());
+          if (!r.ok) {
+            noteFailure(base);
+            return [] as HelperRecord[];
+          }
+          const records = parseHelperResponse(await r.json());
+          noteSuccess(base);
+          return records;
+        } catch {
+          noteFailure(base);
+          return [] as HelperRecord[];
+        }
+      }),
     );
-    if (!records || records.length === 0) return;
-    const merged = mergeHelperRecords(loadCachedHelperRecords(), records, {
+    const records = all.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+    this.ingestHelperRecords(records, 'api');
+  }
+
+  ingestHelperRecords(records: HelperRecord[], source: string): void {
+    if (records.length === 0) return;
+    const existing = loadCachedHelperRecords();
+    const merged = mergeHelperRecords(existing, records, {
       nowSeconds: Math.floor(Date.now() / 1000),
       network: HELPER_DISCOVERY_NETWORK,
-      source: 'api',
+      source,
     });
+    if (sameHelperRecordSet(existing, merged.records)) return;
     saveCachedHelperRecords(merged.records);
+    this.onHelperRecordsChanged();
   }
 
   async pullWellKnownHelperRecords(): Promise<void> {
@@ -337,12 +360,7 @@ export class ServerSync {
       if (!r.ok) return;
       const records = parseHelperResponse(await r.json());
       if (records.length === 0) return;
-      const merged = mergeHelperRecords(loadCachedHelperRecords(), records, {
-        nowSeconds: Math.floor(Date.now() / 1000),
-        network: HELPER_DISCOVERY_NETWORK,
-        source: 'well-known',
-      });
-      saveCachedHelperRecords(merged.records);
+      this.ingestHelperRecords(records, 'well-known');
     } catch {
       return;
     }
@@ -560,4 +578,11 @@ export class ServerSync {
     const body = JSON.stringify({ txs: txs.map((tx) => bytesToHex(encodeTx(tx))) });
     return fanoutWrite(this.apiServers, '/txs', body);
   }
+}
+
+function sameHelperRecordSet(a: HelperRecord[], b: HelperRecord[]): boolean {
+  if (a.length !== b.length) return false;
+  const aHashes = a.map(helperRecordHash).sort();
+  const bHashes = b.map(helperRecordHash).sort();
+  return aHashes.every((hash, i) => hash === bHashes[i]);
 }
