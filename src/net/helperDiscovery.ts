@@ -99,6 +99,13 @@ export function saveCachedHelperRecords(records: HelperRecord[]): void {
   }
 }
 
+export function parseHelperResponse(value: unknown): HelperRecord[] {
+  if (!value || typeof value !== 'object') return [];
+  const helpers = (value as { helpers?: unknown }).helpers;
+  if (!Array.isArray(helpers)) return [];
+  return helpers.slice(0, MAX_RECORDS).filter(isHelperRecordShape);
+}
+
 export function isHelperRecordShape(value: unknown): value is HelperRecord {
   if (!value || typeof value !== 'object') return false;
   const rec = value as Record<string, unknown>;

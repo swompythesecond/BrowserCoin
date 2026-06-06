@@ -5,6 +5,13 @@ import type { Mempool } from '../chain/mempool.js';
 import { decodeTx, encodeTx, txHash, type Transaction } from '../chain/transaction.js';
 import { VerifierPool, configuredVerifierCores } from '../chain/verifierPool.js';
 import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, tryRead } from './apiFanout.js';
+import {
+  HELPER_DISCOVERY_NETWORK,
+  loadCachedHelperRecords,
+  mergeHelperRecords,
+  parseHelperResponse,
+  saveCachedHelperRecords,
+} from './helperDiscovery.js';
 
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
@@ -162,6 +169,7 @@ export class ServerSync {
     // only miners' blocks always reach the peered mesh) plus a fast
     // isolation-rescue poll whenever peer count drops to 0.
     await this.syncOnce();
+    await this.pullHelperRecords();
     await this.pullMempool();
     this.startBridgePolling();
   }
@@ -294,6 +302,22 @@ export class ServerSync {
     }
     this.refreshHealth();
     return out;
+  }
+
+  async pullHelperRecords(): Promise<void> {
+    if (this.apiServers.length === 0) return;
+    const records = await tryRead(
+      this.apiServers,
+      '/helpers',
+      async (r) => parseHelperResponse(await r.json()),
+    );
+    if (!records || records.length === 0) return;
+    const merged = mergeHelperRecords(loadCachedHelperRecords(), records, {
+      nowSeconds: Math.floor(Date.now() / 1000),
+      network: HELPER_DISCOVERY_NETWORK,
+      source: 'api',
+    });
+    saveCachedHelperRecords(merged.records);
   }
 
   private async syncOnce(): Promise<void> {

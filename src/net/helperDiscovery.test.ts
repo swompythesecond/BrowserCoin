@@ -5,6 +5,7 @@ import {
   HELPER_DISCOVERY_NETWORK,
   mergeHelperRecords,
   selectHelperServers,
+  parseHelperResponse,
 } from './helperDiscovery.js';
 
 const now = 1_780_000_000;
@@ -102,5 +103,16 @@ describe('helper discovery', () => {
 
     expect(selected.api).toEqual(['https://api1.browsercoin.org']);
     expect(selected.signaling).toEqual(['https://peer1.browsercoin.org']);
+  });
+
+  it('bounds helper response size and ignores malformed entries', () => {
+    const good = rec('api4.example.org');
+    const tooMany = Array.from({ length: 250 }, (_, i) => rec(`api${i}.many.example`));
+
+    const parsed = parseHelperResponse({ helpers: [good, { bad: true }, ...tooMany] });
+
+    expect(parsed[0]).toEqual(good);
+    expect(parsed).toHaveLength(200);
+    expect(parsed.every((entry) => entry.v === 1)).toBe(true);
   });
 });
