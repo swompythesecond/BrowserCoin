@@ -5,9 +5,29 @@ import type { Mempool } from '../chain/mempool.js';
 import { decodeTx, encodeTx, txHash, type Transaction } from '../chain/transaction.js';
 import { VerifierPool, configuredVerifierCores } from '../chain/verifierPool.js';
 import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, tryRead } from './apiFanout.js';
+import {
+  HELPER_DISCOVERY_NETWORK,
+  helperWellKnownUrl,
+  loadCachedHelperRecords,
+  mergeHelperRecords,
+  parseHelperResponse,
+  saveCachedHelperRecords,
+} from './helperDiscovery.js';
+import { helperRecordHash, type HelperRecord } from './helperRecords.js';
 
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
+const REQUEST_TIMEOUT_MS = 8_000;
+const HELPER_RECORDS_PER_API_SOURCE = 50;
+const MAX_HELPER_RECORDS_PER_PULL = 200;
+/**
+ * Hard cap on a /helpers (or .well-known) response body. Helper records come
+ * from a wider, lower-trust set of origins than /stats|/peers|/tip (any
+ * gossiped operator URL can end up in the api list), so a malicious helper
+ * could otherwise return a multi-GB body and OOM the tab via response.json().
+ * 256 KB comfortably holds the 200-record cap (~1 KB/record) with headroom.
+ */
+const MAX_HELPER_BYTES = 256 * 1024;
 /** Background safety re-sync when we're totally isolated from peers. */
 const ISOLATED_POLL_MS = 10_000;
 /**
@@ -102,6 +122,10 @@ export class ServerSync {
      * non-mining node only pulls when it has no P2P peers to learn txs from.
      */
     private isMining: () => boolean = () => false,
+    /** Called after helper discovery changes the cached server candidates. */
+    private onHelperRecordsChanged: () => void = () => {},
+    /** Per-request timeout so one stalled helper cannot block multi-helper fan-in. */
+    private requestTimeoutMs = REQUEST_TIMEOUT_MS,
   ) {
     this.status.total = apiServers.length;
   }
@@ -162,6 +186,8 @@ export class ServerSync {
     // only miners' blocks always reach the peered mesh) plus a fast
     // isolation-rescue poll whenever peer count drops to 0.
     await this.syncOnce();
+    await this.pullWellKnownHelperRecords();
+    await this.pullHelperRecords();
     await this.pullMempool();
     this.startBridgePolling();
   }
@@ -248,9 +274,15 @@ export class ServerSync {
     // Read stats from each server, take max.
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
-        const r = await fetch(new URL('/stats', base).toString());
-        if (!r.ok) return null;
-        return (await r.json()) as { peerCount: number; minersActive?: number };
+        try {
+          const r = await this.fetchWithTimeout(new URL('/stats', base).toString());
+          if (!r.ok) { noteFailure(base); return null; }
+          noteSuccess(base);
+          return (await r.json()) as { peerCount: number; minersActive?: number };
+        } catch {
+          noteFailure(base);
+          return null;
+        }
       }),
     );
     let peerCount = 0;
@@ -275,10 +307,16 @@ export class ServerSync {
     if (this.apiServers.length === 0) return [];
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
-        const r = await fetch(new URL('/peers', base).toString());
-        if (!r.ok) return [] as string[];
-        const body = (await r.json()) as { peers?: string[] };
-        return body.peers ?? [];
+        try {
+          const r = await this.fetchWithTimeout(new URL('/peers', base).toString());
+          if (!r.ok) { noteFailure(base); return [] as string[]; }
+          const body = (await r.json()) as { peers?: string[] };
+          noteSuccess(base);
+          return body.peers ?? [];
+        } catch {
+          noteFailure(base);
+          return [] as string[];
+        }
       }),
     );
     const seen = new Set<string>();
@@ -294,6 +332,85 @@ export class ServerSync {
     }
     this.refreshHealth();
     return out;
+  }
+
+  async pullHelperRecords(): Promise<void> {
+    if (this.apiServers.length === 0) return;
+    const all = await Promise.allSettled(
+      this.apiServers.map(async (base) => {
+        try {
+          const r = await this.fetchWithTimeout(new URL('/helpers', base).toString());
+          if (!r.ok) {
+            noteFailure(base);
+            return [] as HelperRecord[];
+          }
+          const records = parseHelperResponse(await readJsonCapped(r, MAX_HELPER_BYTES)).slice(0, HELPER_RECORDS_PER_API_SOURCE);
+          noteSuccess(base);
+          return records;
+        } catch {
+          noteFailure(base);
+          return [] as HelperRecord[];
+        }
+      }),
+    );
+    const records = interleaveHelperRecordSources(
+      all.map((r) => (r.status === 'fulfilled' ? r.value : [])),
+      MAX_HELPER_RECORDS_PER_PULL,
+    );
+    this.ingestHelperRecords(records, 'api');
+  }
+
+  ingestHelperRecords(records: HelperRecord[], source: string): void {
+    if (records.length === 0) return;
+    const existing = loadCachedHelperRecords();
+    const merged = mergeHelperRecords(existing, records, {
+      nowSeconds: Math.floor(Date.now() / 1000),
+      network: HELPER_DISCOVERY_NETWORK,
+      source,
+    });
+    if (sameHelperRecordSet(existing, merged.records)) return;
+    saveCachedHelperRecords(merged.records);
+    this.onHelperRecordsChanged();
+  }
+
+  async pullWellKnownHelperRecords(): Promise<void> {
+    let url: string;
+    try {
+      const href = globalThis.location?.href;
+      if (!href) return;
+      url = helperWellKnownUrl(href);
+    } catch {
+      return;
+    }
+
+    try {
+      const r = await this.fetchWithTimeout(url);
+      if (!r.ok) return;
+      const records = parseHelperResponse(await readJsonCapped(r, MAX_HELPER_BYTES));
+      if (records.length === 0) return;
+      this.ingestHelperRecords(records, 'well-known');
+    } catch {
+      return;
+    }
+  }
+
+  private async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const timeout = new Promise<Response>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('request timeout'));
+        }, this.requestTimeoutMs);
+      });
+      return await Promise.race([
+        fetch(url, { ...init, signal: controller.signal }),
+        timeout,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private async syncOnce(): Promise<void> {
@@ -357,7 +474,7 @@ export class ServerSync {
     const all = await Promise.allSettled(
       this.apiServers.map(async (base) => {
         try {
-          const r = await fetch(new URL('/tip', base).toString());
+          const r = await this.fetchWithTimeout(new URL('/tip', base).toString());
           if (!r.ok) { noteFailure(base); return null; }
           const v = (await r.json()) as { height: number; tipHash: string };
           noteSuccess(base);
@@ -508,4 +625,63 @@ export class ServerSync {
     const body = JSON.stringify({ txs: txs.map((tx) => bytesToHex(encodeTx(tx))) });
     return fanoutWrite(this.apiServers, '/txs', body);
   }
+}
+
+/**
+ * Read a response body as JSON, aborting if it exceeds `maxBytes`. Unlike
+ * `response.json()` — which buffers the entire body before we can react — this
+ * streams and bails the moment the cap is crossed, so a hostile helper can't
+ * OOM the tab with a giant `/helpers` payload. Falls back to `response.json()`
+ * when the runtime has no streaming body (e.g. jsdom in tests).
+ */
+export async function readJsonCapped(response: Response, maxBytes: number): Promise<unknown> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') return response.json();
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('helper response too large');
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already drained */ }
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(merged));
+}
+
+function sameHelperRecordSet(a: HelperRecord[], b: HelperRecord[]): boolean {
+  if (a.length !== b.length) return false;
+  const aHashes = a.map(helperRecordHash).sort();
+  const bHashes = b.map(helperRecordHash).sort();
+  return aHashes.every((hash, i) => hash === bHashes[i]);
+}
+
+function interleaveHelperRecordSources(sources: HelperRecord[][], max: number): HelperRecord[] {
+  const out: HelperRecord[] = [];
+  for (let i = 0; out.length < max; i++) {
+    let added = false;
+    for (const source of sources) {
+      const rec = source[i];
+      if (!rec) continue;
+      out.push(rec);
+      added = true;
+      if (out.length >= max) break;
+    }
+    if (!added) break;
+  }
+  return out;
 }

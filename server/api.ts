@@ -36,6 +36,8 @@ import { bytesToHex, hexToBytes } from '../src/util/binary.js';
 import { Mempool } from '../src/chain/mempool.js';
 import { decodeTx, encodeTx, type Transaction } from '../src/chain/transaction.js';
 import { parsePort } from './lib/cli.js';
+import { parseHelperResponse } from '../src/net/helperDiscovery.js';
+import { BROWSERCOIN_NETWORK } from '../src/net/network.js';
 
 const PORT = parsePort(9000);
 const STALE_PEER_MS = 60_000;
@@ -47,7 +49,7 @@ const STALE_PEER_MS = 60_000;
  * on first startup of the new build instead of trying — and failing — to
  * replay blocks the new validator rejects.
  */
-const CHAIN_VERSION = 'browsercoin-pow-v5';
+const CHAIN_VERSION = BROWSERCOIN_NETWORK;
 /**
  * A miner is "active" if they reported mining=true within this window. Set
  * to 3× the client heartbeat interval (30s) so a single missed heartbeat
@@ -81,6 +83,7 @@ const cheapLimiter = rateLimit({
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHAIN_FILE = path.join(__dirname, `chain-${PORT}.json`);
+const HELPERS_FILE = path.join(__dirname, `helpers-${PORT}.json`);
 
 // Tiered chain checkpoints (grandfather-father-son rotation). The server keeps
 // only one live chain file; these backups are point-in-time copies we can
@@ -92,6 +95,7 @@ const BACKUP_CHECK_MS = 1 * 60 * 60 * 1000; // re-evaluate hourly (survives rest
 const TIER_DENSE_MS = 7 * 24 * 60 * 60 * 1000; // < 7d:    keep every backup (twice-daily)
 const TIER_WEEKLY_MS = 28 * 24 * 60 * 60 * 1000; // 7-28d:   keep one per week
 // >= 28d: keep one per calendar month, indefinitely
+let helperRecordCache: unknown[] = [];
 
 const chain = new Blockchain();
 const mempool = new Mempool();
@@ -141,6 +145,19 @@ async function loadChainFromDisk(): Promise<void> {
     } else {
       console.log(`[chain] no ${path.basename(CHAIN_FILE)} yet — starting fresh from genesis`);
     }
+  }
+}
+
+async function loadHelperRecordsFromDisk(): Promise<void> {
+  try {
+    const text = await fs.readFile(HELPERS_FILE, 'utf-8');
+    helperRecordCache = parseHelperResponse(JSON.parse(text));
+    console.log(`[helpers] loaded ${helperRecordCache.length} helper record(s)`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[helpers] load failed:', (e as Error).message);
+    }
+    helperRecordCache = [];
   }
 }
 
@@ -420,6 +437,10 @@ app.get('/peers', cheapLimiter, (_req, res) => {
   res.json({ peers: ids });
 });
 
+app.get('/helpers', cheapLimiter, (_req, res) => {
+  res.json({ helpers: helperRecordCache.slice(0, 200) });
+});
+
 app.post('/heartbeat', cheapLimiter, (req, res) => {
   const { id, height, mining } = req.body as { id?: string; height?: number; mining?: boolean };
   if (typeof id !== 'string' || typeof height !== 'number') {
@@ -530,6 +551,7 @@ app.get('/', cheapLimiter, (_req, res) => {
 
 async function main(): Promise<void> {
   await loadChainFromDisk();
+  await loadHelperRecordsFromDisk();
   // Checkpoint scheduler: only starts after the chain is loaded so the first
   // backup reflects real state. backupTick decides "due" from existing files.
   await backupTick();

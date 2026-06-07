@@ -14,9 +14,20 @@ import {
   encodeTxMsg,
   type ProtoMsg,
 } from './protocol.js';
+import {
+  decodeHelpersMsg,
+  encodeHelpersMsg,
+  loadCachedHelperRecords,
+} from './helperDiscovery.js';
 
 const MAX_PEERS = 8;
 const MIN_PEERS = 3;
+/**
+ * Minimum gap between honoring `helpers` gossip from the same peer. Each ingest
+ * runs up to 50 Ed25519 verifies plus a localStorage merge, so without this a
+ * connected peer could pin the tab by spamming `helpers` messages.
+ */
+const HELPERS_INGEST_COOLDOWN_MS = 30_000;
 const HEARTBEAT_MS = 30_000;
 const TX_REBROADCAST_MS = 15_000;
 const PEER_PREFIX = 'browsercoin-';
@@ -101,6 +112,8 @@ export class PeerNetwork {
   private connections = new Map<string, DataConnection>();
   /** Wall-clock ms of the last message received from each connected peer. */
   private lastSeen = new Map<string, number>();
+  /** Wall-clock ms of the last `helpers` gossip we honored from each peer. */
+  private lastHelpersIngest = new Map<string, number>();
   private status: PeerStatus;
   private statusListeners = new Set<(s: PeerStatus) => void>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -349,6 +362,7 @@ export class PeerNetwork {
     for (const c of this.connections.values()) c.close();
     this.connections.clear();
     this.lastSeen.clear();
+    this.lastHelpersIngest.clear();
     for (const t of this.dialTimers.values()) clearTimeout(t);
     this.dialTimers.clear();
     this.dialing.clear();
@@ -540,6 +554,9 @@ export class PeerNetwork {
       // Ask for more peer IDs so we can broaden the mesh independently of any
       // helper server.
       conn.send({ t: 'getAddrs', max: 32 } satisfies ProtoMsg);
+      // Ask for signed helper candidates too. Peers can only expand our
+      // candidate cache; helper records still need signature/network checks.
+      conn.send({ t: 'getHelpers', max: 50 } satisfies ProtoMsg);
       // Announce our mempool tx hashes to the new peer. Without this, a peer
       // joining 1s after a sender broadcasts never hears about the pending tx
       // and won't include it when it mines. They `getTx` whatever they lack.
@@ -554,6 +571,7 @@ export class PeerNetwork {
       if (this.connections.get(conn.peer) === conn) {
         this.connections.delete(conn.peer);
         this.lastSeen.delete(conn.peer);
+        this.lastHelpersIngest.delete(conn.peer);
         this.status.connected = this.connections.size;
         this.emit();
       }
@@ -704,6 +722,21 @@ export class PeerNetwork {
           if (this.connections.size < MIN_PEERS) {
             void this.dialFromBootstrap();
           }
+          break;
+        }
+
+        case 'getHelpers': {
+          const max = Math.max(1, Math.min(50, msg.max | 0));
+          try { conn.send(encodeHelpersMsg(loadCachedHelperRecords().slice(0, max))); } catch { /* ignore */ }
+          break;
+        }
+
+        case 'helpers': {
+          const now = Date.now();
+          const last = this.lastHelpersIngest.get(conn.peer) ?? 0;
+          if (now - last < HELPERS_INGEST_COOLDOWN_MS) break;
+          this.lastHelpersIngest.set(conn.peer, now);
+          this.serverSync.ingestHelperRecords(decodeHelpersMsg(msg), 'peer');
           break;
         }
 

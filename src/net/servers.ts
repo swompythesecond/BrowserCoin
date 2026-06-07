@@ -1,3 +1,9 @@
+import {
+  HELPER_DISCOVERY_NETWORK,
+  loadCachedHelperRecords,
+  selectHelperServers,
+} from './helperDiscovery.js';
+
 /**
  * Multi-server helper configuration. Replaces the legacy single-bootstrap-URL
  * model with two independent lists:
@@ -38,14 +44,15 @@ const PROD_SIGNALING_SERVERS: string[] = [
 ];
 
 /**
- * Dev defaults map to the split-helper layout:
+ * Local helper layout, used only when you opt in with `npm run dev:local`
+ * (which sets VITE_HELPERS=local) and are running the split helpers yourself:
  *
  *   npm run server:api      → API on :9000
  *   npm run server:peerjs   → signaling on :9001
  *
- * To exercise multi-server failover locally, add a second of either kind via
- * Settings (e.g. start `tsx server/api.ts --port 9002` and add it to the
- * API list, then kill :9000 and watch reads transparently fall over).
+ * Plain `npm run dev` joins the live browsercoin.org network instead, so the UI
+ * works against real peers without standing up local servers. To exercise
+ * multi-server failover locally, add a second of either kind via Settings.
  */
 const DEV_API_SERVERS: string[] = [
   'http://localhost:9000',
@@ -65,10 +72,13 @@ export interface ServerLists {
 }
 
 export function defaultServerLists(): ServerLists {
-  const isDev = !!(import.meta as { env?: { DEV?: boolean } }).env?.DEV;
+  // Default to the live (prod) helpers everywhere, including `npm run dev`, so a
+  // dev build joins the real network out of the box. Opt into local helpers with
+  // `npm run dev:local` (sets VITE_HELPERS=local) when running server:api/peerjs.
+  const useLocal = (import.meta as { env?: { VITE_HELPERS?: string } }).env?.VITE_HELPERS === 'local';
   return {
-    api: isDev ? [...DEV_API_SERVERS] : [...PROD_API_SERVERS],
-    signaling: isDev ? [...DEV_SIGNALING_SERVERS] : [...PROD_SIGNALING_SERVERS],
+    api: useLocal ? [...DEV_API_SERVERS] : [...PROD_API_SERVERS],
+    signaling: useLocal ? [...DEV_SIGNALING_SERVERS] : [...PROD_SIGNALING_SERVERS],
   };
 }
 
@@ -112,10 +122,15 @@ export function loadServerLists(): ServerLists {
     return lists;
   }
 
-  // No persisted config — fall back to hardcoded defaults.
+  // No complete persisted config — try dynamic helper records before hardcoded defaults.
+  const discovered = selectHelperServers(loadCachedHelperRecords(), {
+    nowSeconds: Math.floor(Date.now() / 1000),
+    network: HELPER_DISCOVERY_NETWORK,
+    defaults: defaultServerLists(),
+  });
   return {
-    api: api ?? defaultServerLists().api,
-    signaling: sig ?? defaultServerLists().signaling,
+    api: api ?? discovered.api,
+    signaling: sig ?? discovered.signaling,
   };
 }
 

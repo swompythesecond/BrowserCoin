@@ -6,6 +6,7 @@
   "description": "BrowserCoin — a cryptocurrency that lives in your browser. Open URL, get wallet, mine in your tab.",
   "scripts": {
     "dev": "vite",
+    "dev:local": "vite --mode localhelpers",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
