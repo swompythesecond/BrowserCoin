@@ -302,9 +302,20 @@ Record shape:
 Operators should keep validity windows at or below 30 days, renew records
 before expiry, and serve only HTTPS public URLs except for localhost
 development. Clients reject expired, wrong-network, malformed, non-HTTPS,
-invalid-signature, and oversized records. Selection also caps concentration by
-operator and registrable domain before falling back to manual/default server
-lists.
+invalid-signature, and oversized records (response bodies are byte-capped, and
+peer `helpers` gossip is rate-limited per peer). Both the cache and selection
+cap concentration by operator and registrable domain, and the hardcoded seed
+defaults are always retained in the selected set.
+
+**Trust model.** Discovery is permissionless: an operator is just an Ed25519
+key, so a valid signature proves a record's origin, not that the operator is
+trustworthy. Anyone can publish records. Sybil resistance is therefore
+intentionally bounded — an attacker minting many keys across many domains can
+still bias a no-config client's *helper* set. This is acceptable because helpers
+are never authoritative: every block is validated locally regardless of which
+helper served it, so the worst a hostile helper set can do is withhold/stale
+data or eclipse a client, never forge balances or move coins. Users who want a
+fixed set can pin servers in Settings, which opts out of discovery entirely.
 
 To publish helper records from an API helper, place this JSON file beside the
 server data files:
@@ -329,7 +340,21 @@ server data files:
 
 For the default API port, the filename is `server/helpers-9000.json`. Static
 sites can also publish the same JSON at
-`/.well-known/browsercoin/helpers.json`.
+`/.well-known/browsercoin/helpers.json` — the recommended channel, since it
+needs no helper-server restart (overwrite the file to renew).
+
+Generate keys and sign records with `scripts/sign-helper-record.ts`:
+
+```sh
+# once: create an operator keypair (keep the private key safe)
+tsx scripts/sign-helper-record.ts --genkey --key-file operator.key
+
+# sign/renew a record and append it to the published file
+tsx scripts/sign-helper-record.ts --key-file operator.key \
+  --roles api,signaling \
+  --api https://api.example.org --signaling https://peer.example.org \
+  --days 14 --out public/.well-known/browsercoin/helpers.json
+```
 
 ## 9. Run your own helper
 
