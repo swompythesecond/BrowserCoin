@@ -9,6 +9,7 @@ import {
   helperWellKnownUrl,
   loadCachedHelperRecords,
   mergeHelperRecords,
+  parseHelperRecordsInput,
   parseHelperResponse,
   selectHelperServers,
 } from './helperDiscovery.js';
@@ -262,6 +263,24 @@ describe('helper discovery', () => {
     expect(msg.t).toBe('helpers');
     expect(msg.records).toHaveLength(50);
     expect(decoded).toEqual(records.slice(0, 50));
+  });
+
+  it('parses a single pasted record object', () => {
+    const r = rec('api.paste.example');
+    expect(parseHelperRecordsInput(JSON.stringify(r))).toEqual([r]);
+  });
+
+  it('parses a pasted { helpers: [...] } blob', () => {
+    const a = rec('api1.blob.example');
+    const b = rec('api2.blob.example');
+    expect(parseHelperRecordsInput(JSON.stringify({ helpers: [a, b] }))).toEqual([a, b]);
+  });
+
+  it('returns [] for malformed or non-record paste input', () => {
+    expect(parseHelperRecordsInput('not json')).toEqual([]);
+    expect(parseHelperRecordsInput('"a string"')).toEqual([]);
+    expect(parseHelperRecordsInput('{}')).toEqual([]);
+    expect(parseHelperRecordsInput(JSON.stringify({ helpers: [{ bad: true }] }))).toEqual([]);
   });
 
   it('builds same-origin well-known helper URL', () => {

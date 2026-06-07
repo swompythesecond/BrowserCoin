@@ -3,6 +3,12 @@ import { generateKeyPair } from '../crypto/keys.js';
 import { CHAIN_VERSION, type Node } from '../node.js';
 import { cardHeader } from './info.js';
 import { defaultServerLists, parseServerInput } from '../net/servers.js';
+import {
+  HELPER_DISCOVERY_NETWORK,
+  loadCachedHelperRecords,
+  parseHelperRecordsInput,
+} from '../net/helperDiscovery.js';
+import { isHelperRecordUsable, type HelperRecord } from '../net/helperRecords.js';
 import { clearAll } from '../storage/idb.js';
 import { encodeBlock } from '../chain/block.js';
 import { bytesToHex } from '../util/binary.js';
@@ -74,6 +80,30 @@ https://server2.example"></textarea>
           <button data-w="save-servers">Save server lists</button>
           <button class="ghost" data-w="reset-servers">Reset to defaults</button>
         </div>
+      </section>
+
+      <section class="card col-2" data-mount="advertise">
+        <div data-slot="header"></div>
+        <p class="text-sm muted" style="margin:0 0 12px;">
+          The list above is the servers <b>this browser</b> uses. This section is the other
+          direction: helpers your client has <b>discovered</b> from peers, and a way to
+          <b>advertise your own</b> so others discover it too — no gatekeeper, no redeploy.
+          Records are signed by whoever runs the helper and are only hints; every block is
+          still verified locally, so a bad helper can stall or withhold but never forge.
+        </p>
+        <label>Discovered helpers <span class="muted" data-w="helper-count"></span></label>
+        <div data-w="helper-list" class="text-sm mt-sm"></div>
+        <label class="mt-md">Advertise a helper</label>
+        <textarea data-w="advertise-input" rows="5" placeholder='Paste a signed helper record, e.g.
+{ "v":1, "network":"browsercoin-pow-v5", "roles":["api","signaling"], "api":"https://…", … }'></textarea>
+        <div class="text-sm muted mt-sm">
+          Run a helper, then sign a record with <code>scripts/sign-helper-record.ts</code> and
+          paste it here. It is seeded locally and gossiped to peers while this tab is open.
+        </div>
+        <div class="row mt-md">
+          <button data-w="advertise-btn">Advertise helper</button>
+        </div>
+        <div class="text-sm mt-sm" data-w="advertise-msg"></div>
       </section>
 
       <section class="card col-2" data-mount="verify">
@@ -154,6 +184,14 @@ https://server2.example"></textarea>
       body: `BrowserCoin is end-to-end peer-to-peer — the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper — the URLs are public.`,
     },
   }));
+  view.querySelector<HTMLElement>('[data-mount="advertise"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Advertise & discovered helpers',
+    info: {
+      title: 'Advertising a helper',
+      body: `Helper discovery is permissionless — anyone can run an API or signaling helper and have it found, without asking the project. A helper announces itself with a small record signed by its operator key.\n\nThe signature proves who published the record, not that the helper is trustworthy: it can't make your client accept invalid blocks (those are always validated locally), so the worst a bad helper does is serve stale data or go offline. Your hardcoded seed helpers are always kept regardless.\n\nTo advertise: run your helper, generate a record with scripts/sign-helper-record.ts, and paste it here. Pasting seeds it into this client and gossips it to peers you connect to. To make it stick even when your tab is closed, also host the same JSON at your server's /helpers or at /.well-known/browsercoin/helpers.json.`,
+    },
+    link: { label: 'Refresh', onClick: () => renderHelperList() },
+  }));
   view.querySelector<HTMLElement>('[data-mount="verify"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Chain verification',
     info: {
@@ -215,6 +253,79 @@ https://server2.example"></textarea>
     node.setServerLists(defaultServerLists());
     renderServerLists();
     flash(msg, 'Server lists reset to defaults. Network reconnecting.', 'green');
+  });
+
+  // --- Advertise & discovered helpers -----------------------------------
+  const helperCount = view.querySelector<HTMLElement>('[data-w="helper-count"]')!;
+  const helperList = view.querySelector<HTMLElement>('[data-w="helper-list"]')!;
+  const advertiseInput = view.querySelector<HTMLTextAreaElement>('[data-w="advertise-input"]')!;
+  const advertiseBtn = view.querySelector<HTMLButtonElement>('[data-w="advertise-btn"]')!;
+  const advertiseMsg = view.querySelector<HTMLElement>('[data-w="advertise-msg"]')!;
+
+  const expiryLabel = (validUntil: number, now: number): string => {
+    if (validUntil <= now) return 'expired';
+    const days = Math.floor((validUntil - now) / 86400);
+    return days >= 1 ? `expires in ${days}d` : 'expires in <1d';
+  };
+
+  // Build rows with textContent only — record fields are attacker-controlled
+  // strings and must never be interpolated into HTML.
+  const renderHelperList = (): void => {
+    const records = loadCachedHelperRecords();
+    helperCount.textContent = `(${records.length})`;
+    helperList.replaceChildren();
+    if (records.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.textContent = 'None yet. Helpers arrive from peers and configured API servers — or paste one below.';
+      helperList.appendChild(empty);
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    for (const rec of records) {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:6px 0;border-top:1px solid rgba(127,127,127,0.18);';
+      const urls = document.createElement('div');
+      urls.textContent = [rec.api, rec.signaling].filter(Boolean).join('  ·  ');
+      const meta = document.createElement('div');
+      meta.className = 'muted';
+      meta.textContent = `operator ${rec.operator.slice(0, 8)}… · ${expiryLabel(rec.validUntil, now)}`;
+      row.appendChild(urls);
+      row.appendChild(meta);
+      helperList.appendChild(row);
+    }
+  };
+  renderHelperList();
+
+  advertiseBtn.addEventListener('click', () => {
+    const text = advertiseInput.value.trim();
+    if (!text) { flash(advertiseMsg, 'Paste a signed helper record first.', 'red'); return; }
+    if (!node.serverSync) { flash(advertiseMsg, 'Network not ready yet — try again in a moment.', 'red'); return; }
+
+    const parsed = parseHelperRecordsInput(text);
+    if (parsed.length === 0) {
+      flash(advertiseMsg, 'Could not read a helper record — expected the JSON from the signing tool.', 'red');
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const usable: HelperRecord[] = [];
+    const reasons: string[] = [];
+    for (const rec of parsed) {
+      const err = isHelperRecordUsable(rec, { nowSeconds: now, network: HELPER_DISCOVERY_NETWORK });
+      if (err) reasons.push(err); else usable.push(rec);
+    }
+
+    if (usable.length === 0) {
+      flash(advertiseMsg, `Rejected: ${reasons[0]}.`, 'red');
+      return;
+    }
+
+    node.serverSync.ingestHelperRecords(usable, 'manual');
+    advertiseInput.value = '';
+    renderHelperList();
+    const rejected = reasons.length ? ` · ${reasons.length} rejected (${reasons[0]})` : '';
+    flash(advertiseMsg, `Advertised ${usable.length} helper${usable.length > 1 ? 's' : ''}${rejected}. Gossiping to peers.`, 'green');
   });
 
   // --- Network ID reveal/hide/copy --------------------------------------

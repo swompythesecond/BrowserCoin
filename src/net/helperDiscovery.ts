@@ -160,6 +160,28 @@ export function parseHelperResponse(value: unknown): HelperRecord[] {
   return records;
 }
 
+/**
+ * Parse pasted text (from the Settings "advertise a helper" box) into shape-valid
+ * helper records. Accepts either a single signed record object or a full
+ * `{ "helpers": [...] }` blob (e.g. the contents of a .well-known file) — both are
+ * what `scripts/sign-helper-record.ts` can emit. Returns `[]` on malformed JSON.
+ * Full usability (signature/expiry/network/HTTPS) is checked separately by the
+ * caller via isHelperRecordUsable, so it can surface a per-record reason.
+ */
+export function parseHelperRecordsInput(text: string): HelperRecord[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  // A bare record object → normalize to the { helpers: [...] } shape.
+  if (value && typeof value === 'object' && !Array.isArray(value) && !('helpers' in value)) {
+    value = { helpers: [value] };
+  }
+  return parseHelperResponse(value);
+}
+
 export function encodeHelpersMsg(records: HelperRecord[]): Extract<ProtoMsg, { t: 'helpers' }> {
   return { t: 'helpers', records: records.slice(0, 50) };
 }
