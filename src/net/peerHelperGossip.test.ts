@@ -4,6 +4,7 @@ import { PeerNetwork } from './peer.js';
 import {
   HELPER_DISCOVERY_NETWORK,
   loadCachedHelperRecords,
+  mergeHelperRecords,
   saveCachedHelperRecords,
 } from './helperDiscovery.js';
 import { signHelperRecord, type HelperRecord, type HelperRecordUnsigned } from './helperRecords.js';
@@ -87,9 +88,19 @@ function peerNetwork(): PeerNetwork {
     add: () => null,
     get: () => null,
   };
+  // Mirror ServerSync.ingestHelperRecords — the single validate+merge+save
+  // chokepoint the real PeerNetwork delegates gossip to.
   const serverSync = {
     fetchPeers: async () => [],
     heartbeat: async () => null,
+    ingestHelperRecords: (records: HelperRecord[], source: string) => {
+      const merged = mergeHelperRecords(loadCachedHelperRecords(), records, {
+        nowSeconds: Math.floor(Date.now() / 1000),
+        network: HELPER_DISCOVERY_NETWORK,
+        source,
+      });
+      saveCachedHelperRecords(merged.records);
+    },
   };
   return new PeerNetwork(chain as never, mempool as never, [], serverSync as never, () => {});
 }
@@ -132,5 +143,19 @@ describe('peer helper gossip', () => {
     });
 
     expect(loadCachedHelperRecords()).toEqual([incoming]);
+  });
+
+  it('throttles repeated helper gossip from the same peer', () => {
+    const first = helper('api.first.example');
+    const second = helper('api.second.example');
+    const net = peerNetwork();
+    const conn = new FakeConnection('browsercoin-peer-d');
+    const onIncoming = (net as never as { onIncoming(conn: FakeConnection, msg: unknown): void }).onIncoming.bind(net);
+
+    onIncoming(conn, { t: 'helpers', records: [first] });
+    // Second message arrives within the cooldown window → ignored.
+    onIncoming(conn, { t: 'helpers', records: [second] });
+
+    expect(loadCachedHelperRecords()).toEqual([first]);
   });
 });
