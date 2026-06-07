@@ -5,7 +5,26 @@ import {
   HELPER_DISCOVERY_NETWORK,
   loadCachedHelperRecords,
 } from './helperDiscovery.js';
-import { ServerSync } from './serverSync.js';
+import { ServerSync, readJsonCapped } from './serverSync.js';
+
+/** A Response whose body streams the given chunks, like a real fetch body. */
+function streamResponse(chunks: Uint8Array[]): Response {
+  let i = 0;
+  return {
+    body: {
+      getReader() {
+        return {
+          read: async () =>
+            i < chunks.length ? { done: false, value: chunks[i++] } : { done: true, value: undefined },
+          cancel: async () => {},
+        };
+      },
+    },
+    json: async () => {
+      throw new Error('json() must not be called when a body stream is present');
+    },
+  } as unknown as Response;
+}
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -147,5 +166,22 @@ describe('ServerSync helper discovery', () => {
 
     expect(loadCachedHelperRecords()).toEqual([discovered]);
     expect(notifications).toBe(1);
+  });
+});
+
+describe('readJsonCapped', () => {
+  it('rejects a response body larger than the cap', async () => {
+    const big = new TextEncoder().encode('x'.repeat(2000));
+    await expect(readJsonCapped(streamResponse([big]), 1000)).rejects.toThrow('too large');
+  });
+
+  it('reads a JSON body within the cap', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify({ helpers: [] }));
+    await expect(readJsonCapped(streamResponse([bytes]), 1000)).resolves.toEqual({ helpers: [] });
+  });
+
+  it('falls back to json() when the runtime has no streaming body', async () => {
+    const res = { json: async () => ({ ok: 1 }) } as unknown as Response;
+    await expect(readJsonCapped(res, 1000)).resolves.toEqual({ ok: 1 });
   });
 });

@@ -20,6 +20,14 @@ const PULL_BATCH = 100;
 const REQUEST_TIMEOUT_MS = 8_000;
 const HELPER_RECORDS_PER_API_SOURCE = 50;
 const MAX_HELPER_RECORDS_PER_PULL = 200;
+/**
+ * Hard cap on a /helpers (or .well-known) response body. Helper records come
+ * from a wider, lower-trust set of origins than /stats|/peers|/tip (any
+ * gossiped operator URL can end up in the api list), so a malicious helper
+ * could otherwise return a multi-GB body and OOM the tab via response.json().
+ * 256 KB comfortably holds the 200-record cap (~1 KB/record) with headroom.
+ */
+const MAX_HELPER_BYTES = 256 * 1024;
 /** Background safety re-sync when we're totally isolated from peers. */
 const ISOLATED_POLL_MS = 10_000;
 /**
@@ -336,7 +344,7 @@ export class ServerSync {
             noteFailure(base);
             return [] as HelperRecord[];
           }
-          const records = parseHelperResponse(await r.json()).slice(0, HELPER_RECORDS_PER_API_SOURCE);
+          const records = parseHelperResponse(await readJsonCapped(r, MAX_HELPER_BYTES)).slice(0, HELPER_RECORDS_PER_API_SOURCE);
           noteSuccess(base);
           return records;
         } catch {
@@ -378,7 +386,7 @@ export class ServerSync {
     try {
       const r = await this.fetchWithTimeout(url);
       if (!r.ok) return;
-      const records = parseHelperResponse(await r.json());
+      const records = parseHelperResponse(await readJsonCapped(r, MAX_HELPER_BYTES));
       if (records.length === 0) return;
       this.ingestHelperRecords(records, 'well-known');
     } catch {
@@ -617,6 +625,42 @@ export class ServerSync {
     const body = JSON.stringify({ txs: txs.map((tx) => bytesToHex(encodeTx(tx))) });
     return fanoutWrite(this.apiServers, '/txs', body);
   }
+}
+
+/**
+ * Read a response body as JSON, aborting if it exceeds `maxBytes`. Unlike
+ * `response.json()` — which buffers the entire body before we can react — this
+ * streams and bails the moment the cap is crossed, so a hostile helper can't
+ * OOM the tab with a giant `/helpers` payload. Falls back to `response.json()`
+ * when the runtime has no streaming body (e.g. jsdom in tests).
+ */
+export async function readJsonCapped(response: Response, maxBytes: number): Promise<unknown> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') return response.json();
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('helper response too large');
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already drained */ }
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(merged));
 }
 
 function sameHelperRecordSet(a: HelperRecord[], b: HelperRecord[]): boolean {
