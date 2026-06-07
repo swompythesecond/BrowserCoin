@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { generateKeyPair } from '../crypto/keys.js';
-import { signHelperRecord, type HelperRecord, type HelperRecordUnsigned } from './helperRecords.js';
+import { helperRecordHash, signHelperRecord, type HelperRecord, type HelperRecordUnsigned } from './helperRecords.js';
 import { ServerSync } from './serverSync.js';
 import {
   decodeHelpersMsg,
@@ -183,6 +183,63 @@ describe('helper discovery', () => {
 
     expect(selected.api).toEqual(['https://api1.browsercoin.org']);
     expect(selected.signaling).toEqual(['https://peer1.browsercoin.org']);
+  });
+
+  it('caps cache slots per operator so one operator cannot flood the cache', () => {
+    const kp = generateKeyPair();
+    const flood = Array.from({ length: 40 }, (_, i) => recFromOperator(`api${i}.dom${i}.example`, kp));
+
+    const merged = mergeHelperRecords([], flood, {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      source: 'test',
+    });
+
+    expect(merged.records).toHaveLength(8);
+    expect(merged.records.every((r) => r.operator === kp.address)).toBe(true);
+  });
+
+  it('caps cache slots per registrable domain so one domain cannot flood the cache', () => {
+    const flood = Array.from({ length: 40 }, (_, i) => rec(`api${i}.same.example`));
+
+    const merged = mergeHelperRecords([], flood, {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      source: 'test',
+    });
+
+    expect(merged.records).toHaveLength(8);
+  });
+
+  it('keeps the seed defaults selectable even when the cache is fully poisoned', () => {
+    const poison = Array.from({ length: 60 }, (_, i) => rec(`api${i}.evil${i}.example`));
+
+    const selected = selectHelperServers(poison, {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      defaults: {
+        api: ['https://api1.browsercoin.org'],
+        signaling: ['https://peer1.browsercoin.org'],
+      },
+    });
+
+    expect(selected.api).toContain('https://api1.browsercoin.org');
+    expect(selected.signaling).toContain('https://peer1.browsercoin.org');
+  });
+
+  it('orders records by hash, giving no advantage to longer-validity records', () => {
+    // Distinct validity windows so a validUntil-based sort would reorder them.
+    const records = Array.from({ length: 6 }, (_, i) =>
+      rec(`api${i}.order${i}.example`, { validUntil: now + (i + 1) * 24 * 3600 }));
+
+    const merged = mergeHelperRecords([], records, {
+      nowSeconds: now,
+      network: HELPER_DISCOVERY_NETWORK,
+      source: 'test',
+    });
+
+    const byHash = [...records].sort((a, b) => helperRecordHash(a).localeCompare(helperRecordHash(b)));
+    expect(merged.records).toEqual(byHash);
   });
 
   it('bounds helper response size and ignores malformed entries', () => {

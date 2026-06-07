@@ -6,6 +6,7 @@ import {
   saveCachedHelperRecords,
 } from './net/helperDiscovery.js';
 import { signHelperRecord, type HelperRecordUnsigned } from './net/helperRecords.js';
+import { defaultServerLists } from './net/servers.js';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -70,12 +71,15 @@ describe('Node helper discovery live application', () => {
     ]);
     (node as never as { refreshServerListsFromDiscovery(): void }).refreshServerListsFromDiscovery();
 
+    // Discovered helpers are applied live, appended to the always-retained seed
+    // defaults — and never persisted as manual config.
+    const defaults = defaultServerLists();
     expect(node.serverLists).toEqual({
-      api: ['https://api.live.example'],
-      signaling: ['https://peer.live.example'],
+      api: [...defaults.api, 'https://api.live.example'],
+      signaling: [...defaults.signaling, 'https://peer.live.example'],
     });
-    expect(apiUpdates).toEqual([['https://api.live.example']]);
-    expect(signalingUpdates).toEqual([['https://peer.live.example']]);
+    expect(apiUpdates).toEqual([[...defaults.api, 'https://api.live.example']]);
+    expect(signalingUpdates).toEqual([[...defaults.signaling, 'https://peer.live.example']]);
     expect(storage.getItem('browsercoin:api-servers')).toBeNull();
     expect(storage.getItem('browsercoin:signaling-servers')).toBeNull();
   });
@@ -96,7 +100,8 @@ describe('Node helper discovery live application', () => {
     ]);
     node.refreshServerListsFromDiscovery();
 
-    expect(node.serverLists.signaling).toEqual(['https://peer.blackhole.example']);
+    const defaults = defaultServerLists();
+    expect(node.serverLists.signaling).toEqual([...defaults.signaling, 'https://peer.blackhole.example']);
     expect(signalingUpdates).toEqual([]);
   });
 });
