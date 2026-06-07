@@ -22,6 +22,26 @@ import {
 
 const MAX_PEERS = 8;
 const MIN_PEERS = 3;
+// Total WebRTC connection ceiling (inbound + outbound). MAX_PEERS above is only
+// the outbound *dial target* — how many peers we actively seek. This is the hard
+// cap that also bounds INBOUND connections, which were otherwise unlimited: on a
+// busy network a node would accept a link from everyone and burn CPU/memory
+// gossiping to dozens of peers. Tunable in Settings → Direct peer connect.
+export const PEER_CAP_KEY = 'browsercoin:max-connections';
+export const DEFAULT_MAX_CONNECTIONS = 12;
+export const MIN_MAX_CONNECTIONS = 6;
+export const MAX_MAX_CONNECTIONS = 24;
+
+/** Read the configured total connection ceiling from localStorage, clamped. */
+export function configuredMaxConnections(): number {
+  try {
+    const raw = Number(globalThis.localStorage?.getItem(PEER_CAP_KEY));
+    if (Number.isFinite(raw) && raw > 0) {
+      return Math.max(MIN_MAX_CONNECTIONS, Math.min(MAX_MAX_CONNECTIONS, Math.floor(raw)));
+    }
+  } catch { /* localStorage unavailable */ }
+  return DEFAULT_MAX_CONNECTIONS;
+}
 /**
  * Minimum gap between honoring `helpers` gossip from the same peer. Each ingest
  * runs up to 50 Ed25519 verifies plus a localStorage merge, so without this a
@@ -110,6 +130,8 @@ export class PeerNetwork {
   private myId: string | null = null;
 
   private connections = new Map<string, DataConnection>();
+  /** Total connection ceiling (inbound + outbound); user-tunable in Settings. */
+  private maxConnections = configuredMaxConnections();
   /** Wall-clock ms of the last message received from each connected peer. */
   private lastSeen = new Map<string, number>();
   /** Wall-clock ms of the last `helpers` gossip we honored from each peer. */
@@ -162,6 +184,8 @@ export class PeerNetwork {
   private dialTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Notified whenever a peer ID is observed (live or learned) so Node can persist it. */
   private peerSeenListeners = new Set<(id: string) => void>();
+  /** Notified when a dial fails (dead ID) so Node can count failures / evict it. */
+  private peerFailedListeners = new Set<(id: string) => void>();
 
   constructor(
     private chain: Blockchain,
@@ -188,6 +212,31 @@ export class PeerNetwork {
     return { ...this.status, signalingServers: this.status.signalingServers.map((s) => ({ ...s })) };
   }
 
+  /** Current total connection ceiling. */
+  getMaxConnections(): number {
+    return this.maxConnections;
+  }
+
+  /**
+   * Update the total connection ceiling at runtime (from Settings). If lowered
+   * below the current connection count, the excess links are closed immediately
+   * so the change takes effect now rather than waiting for natural churn.
+   */
+  setMaxConnections(n: number): void {
+    this.maxConnections = Math.max(MIN_MAX_CONNECTIONS, Math.min(MAX_MAX_CONNECTIONS, Math.floor(n)));
+    const excess = this.connections.size - this.maxConnections;
+    if (excess <= 0) return;
+    for (const peerId of [...this.connections.keys()].slice(0, excess)) {
+      const conn = this.connections.get(peerId);
+      try { conn?.close(); } catch { /* ignore */ }
+      this.connections.delete(peerId);
+      this.lastSeen.delete(peerId);
+      this.lastHelpersIngest.delete(peerId);
+    }
+    this.status.connected = this.connections.size;
+    this.emit();
+  }
+
   onStatus(fn: (s: PeerStatus) => void): () => void {
     this.statusListeners.add(fn);
     return () => this.statusListeners.delete(fn);
@@ -197,6 +246,12 @@ export class PeerNetwork {
   onPeerSeen(fn: (id: string) => void): () => void {
     this.peerSeenListeners.add(fn);
     return () => this.peerSeenListeners.delete(fn);
+  }
+
+  /** Subscribe to "dial failed" events. Used by Node to evict dead peers from IDB. */
+  onPeerFailed(fn: (id: string) => void): () => void {
+    this.peerFailedListeners.add(fn);
+    return () => this.peerFailedListeners.delete(fn);
   }
 
   /**
@@ -332,7 +387,17 @@ export class PeerNetwork {
         // churns at full width rather than 8-every-DIAL_TIMEOUT_MS.
         if (err.type === 'peer-unavailable') {
           const deadId = err.message.split(' ').pop();
-          if (deadId && deadId.startsWith(PEER_PREFIX)) this.releaseDial(deadId);
+          if (deadId && deadId.startsWith(PEER_PREFIX)) {
+            this.releaseDial(deadId);
+            // Drop it from the in-memory pool so this session stops considering
+            // it, and notify Node so the persisted entry's failure count ticks up
+            // (evicted from IDB after MAX_PEER_FAILURES, instead of lingering for
+            // the full 7-day TTL and being re-dialed every page load).
+            this.candidatePool.delete(deadId);
+            for (const fn of this.peerFailedListeners) {
+              try { fn(deadId); } catch { /* ignore */ }
+            }
+          }
         }
         if (!opened) {
           this.markSignalingOpen(signalingUrl, false);
@@ -494,7 +559,8 @@ export class PeerNetwork {
     if (!origin) return; // no signaling open right now; try again next heartbeat
     for (const id of fresh) {
       // Count in-flight dials, not just opened connections — see `dialing`.
-      if (this.connections.size + this.dialing.size >= MAX_PEERS) break;
+      // Dial toward MAX_PEERS, but never past the (possibly lower) total cap.
+      if (this.connections.size + this.dialing.size >= Math.min(MAX_PEERS, this.maxConnections)) break;
       this.dialedThisSession.add(id);
       this.beginDial(id);
       const conn = origin.connect(id, { reliable: true });
@@ -530,6 +596,14 @@ export class PeerNetwork {
       // servers in quick succession. Keep the first; close the rest.
       const existing = this.connections.get(conn.peer);
       if (existing && existing !== conn) {
+        try { conn.close(); } catch { /* ignore */ }
+        return;
+      }
+      // Enforce the total connection ceiling. This is the only cap on INBOUND
+      // connections (outbound is bounded by the dial loop), so without it a node
+      // on a busy network accepts a link from everyone. Replacing a peer we
+      // already hold is fine; a brand-new one over the cap gets closed.
+      if (!existing && this.connections.size >= this.maxConnections) {
         try { conn.close(); } catch { /* ignore */ }
         return;
       }

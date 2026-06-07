@@ -20,6 +20,7 @@ import {
   listCachedPeers,
   putBlock,
   putMeta,
+  recordPeerFailure,
   recordPeerSeen,
 } from './storage/idb.js';
 
@@ -391,6 +392,14 @@ export class Node {
     this.network.onPeerSeen((id) => {
       void recordPeerSeen(id).catch((e) =>
         console.warn('[node] peer cache write failed:', (e as Error).message),
+      );
+    });
+
+    // Tick up the failure count for dead IDs so they're evicted from the cache
+    // after MAX_PEER_FAILURES instead of lingering and being re-dialed each load.
+    this.network.onPeerFailed((id) => {
+      void recordPeerFailure(id).catch((e) =>
+        console.warn('[node] peer failure write failed:', (e as Error).message),
       );
     });
 

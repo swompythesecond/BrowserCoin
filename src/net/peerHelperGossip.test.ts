@@ -159,3 +159,30 @@ describe('peer helper gossip', () => {
     expect(loadCachedHelperRecords()).toEqual([first]);
   });
 });
+
+describe('peer connection cap', () => {
+  beforeEach(() => storage.clear());
+
+  const adopt = (net: PeerNetwork, conn: FakeConnection): void => {
+    (net as never as { adoptConnection(c: FakeConnection): void }).adoptConnection(conn);
+    conn.emit('open');
+  };
+  const setCap = (net: PeerNetwork, n: number): void =>
+    (net as never as { setMaxConnections(n: number): void }).setMaxConnections(n);
+
+  it('caps total connections at the ceiling and rejects the rest', () => {
+    const net = peerNetwork();
+    setCap(net, 6);
+    for (let i = 0; i < 12; i++) adopt(net, new FakeConnection(`browsercoin-peer-${i}`));
+    expect(net.getStatus().connected).toBe(6);
+  });
+
+  it('trims excess connections immediately when the cap is lowered', () => {
+    const net = peerNetwork();
+    setCap(net, 10);
+    for (let i = 0; i < 10; i++) adopt(net, new FakeConnection(`browsercoin-peer-${i}`));
+    expect(net.getStatus().connected).toBe(10);
+    setCap(net, 6);
+    expect(net.getStatus().connected).toBe(6);
+  });
+});

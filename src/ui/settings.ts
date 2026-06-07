@@ -9,6 +9,12 @@ import {
   parseHelperRecordsInput,
 } from '../net/helperDiscovery.js';
 import { isHelperRecordUsable, type HelperRecord } from '../net/helperRecords.js';
+import {
+  PEER_CAP_KEY,
+  MIN_MAX_CONNECTIONS,
+  MAX_MAX_CONNECTIONS,
+  configuredMaxConnections,
+} from '../net/peer.js';
 import { clearAll } from '../storage/idb.js';
 import { encodeBlock } from '../chain/block.js';
 import { bytesToHex } from '../util/binary.js';
@@ -155,6 +161,9 @@ https://server2.example"></textarea>
           <button data-w="dial-btn">Connect</button>
         </div>
         <div class="text-sm mt-sm" data-w="dial-msg"></div>
+        <label class="mt-md" style="margin-bottom:0;">Max peer connections: <span data-w="pcap">12</span></label>
+        <div class="text-sm muted mb-sm">How many WebRTC peers this tab holds at once (inbound + outbound). Lower it if a busy network makes the tab heavy; higher connects you to more of the mesh.</div>
+        <input type="range" min="6" max="24" value="12" step="1" class="slider" data-w="pslider" />
       </section>
 
     </div>
@@ -253,6 +262,21 @@ https://server2.example"></textarea>
     node.setServerLists(defaultServerLists());
     renderServerLists();
     flash(msg, 'Server lists reset to defaults. Network reconnecting.', 'green');
+  });
+
+  // --- Max peer connections ---------------------------------------------
+  const pSlider = view.querySelector<HTMLInputElement>('[data-w="pslider"]')!;
+  const pCapEl = view.querySelector<HTMLElement>('[data-w="pcap"]')!;
+  pSlider.min = String(MIN_MAX_CONNECTIONS);
+  pSlider.max = String(MAX_MAX_CONNECTIONS);
+  const savedCap = configuredMaxConnections();
+  pSlider.value = String(savedCap);
+  pCapEl.textContent = String(savedCap);
+  pSlider.addEventListener('input', () => {
+    const n = Math.max(MIN_MAX_CONNECTIONS, Math.min(MAX_MAX_CONNECTIONS, Math.floor(Number(pSlider.value)) || MIN_MAX_CONNECTIONS));
+    pCapEl.textContent = String(n);
+    localStorage.setItem(PEER_CAP_KEY, String(n));
+    node.network?.setMaxConnections(n);   // live effect: trims excess if lowered
   });
 
   // --- Advertise & discovered helpers -----------------------------------
