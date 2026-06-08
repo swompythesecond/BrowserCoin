@@ -696,6 +696,101 @@ label {
 }
 .about-body tr:last-child td { border-bottom: none; }
 
+/* ============ Community Highlights ============ */
+
+.highlight-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  text-decoration: none;
+  color: var(--text-2);
+  transition: border-color var(--transition), background var(--transition), transform var(--transition);
+}
+.highlight-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  transform: translateY(-2px);
+}
+.highlight-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.highlight-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.highlight-arrow {
+  color: var(--muted);
+  font-size: 1rem;
+  transition: color var(--transition);
+}
+.highlight-card:hover .highlight-arrow { color: var(--text); }
+.highlight-title {
+  margin: 2px 0 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+.highlight-desc {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.highlight-host {
+  margin-top: auto;
+  padding-top: 4px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.highlight-cta {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 22px 24px;
+}
+.highlight-cta-body { flex: 1; min-width: 240px; }
+.highlight-cta-title {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+.highlight-cta-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.highlight-cta-btn {
+  flex-shrink: 0;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .highlight-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ============ Wallet QR ============ */
 
 .qr-wrap {

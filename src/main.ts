@@ -14,6 +14,7 @@ import { mountMempool } from './ui/mempool.js';
 import { mountSettings } from './ui/settings.js';
 import { mountAbout } from './ui/about.js';
 import { mountDevelopers } from './ui/developers.js';
+import { mountHighlights } from './ui/highlights.js';
 import { compactToTarget } from './util/binary.js';
 import { Router, wireNav } from './ui/router.js';
 import { TICKER } from './brand.js';
@@ -101,6 +102,7 @@ router
   .route('/explorer', (host) => mountExplorer(host, node))
   .route('/mempool',  (host) => mountMempool(host, node))
   .route('/about',    (host) => mountAbout(host))
+  .route('/highlights', (host) => mountHighlights(host))
   .route('/developers', (host) => mountDevelopers(host))
   .route('/settings', (host) => mountSettings(host, node))
   .setFallback('/');
