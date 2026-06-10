@@ -26,6 +26,23 @@ export function cloneState(s: State): State {
   return out;
 }
 
+/** Row form for persisting state to IDB: [addressHex, balance(decimal), nonce]. */
+export type StateRow = [string, string, number];
+
+/** Flatten state to plain JSON-clonable rows (bigint → decimal string). */
+export function serializeState(s: State): StateRow[] {
+  const out: StateRow[] = [];
+  for (const [k, v] of s) out.push([k, v.balance.toString(), v.nonce]);
+  return out;
+}
+
+/** Rebuild state from `serializeState` rows. Inverse of `serializeState`. */
+export function deserializeState(rows: StateRow[]): State {
+  const m: State = new Map();
+  for (const [k, b, n] of rows) m.set(k, { balance: BigInt(b), nonce: n });
+  return m;
+}
+
 /** Deterministic root of state: sort accounts by address, hash each, merkle. */
 export function stateRoot(state: State): Uint8Array {
   const keys = [...state.keys()].sort();

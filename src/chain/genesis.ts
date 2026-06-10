@@ -73,6 +73,17 @@ export const MAX_FUTURE_TIME_S = 10 * 60;
 /** Max serialized block size (browser-friendly cap). */
 export const MAX_BLOCK_BYTES = 256 * 1024;
 
+/**
+ * How far below the tip the local state snapshot is taken on restore. This is a
+ * LOCAL, per-tab, regenerable performance cache — NOT a consensus checkpoint: it
+ * is derived from already-validated blocks, never constrains fork choice, and is
+ * discarded on any anomaly (see `Blockchain.seedFromSnapshot`). The depth bounds
+ * the tail replayed on load to ≤ this many blocks. Sync only overlaps 5 blocks
+ * (serverSync), so real reorgs are tiny; 100 gives ~20× headroom before a reorg
+ * could reach the snapshot anchor.
+ */
+export const SNAPSHOT_DEPTH = 100;
+
 /** Mempool size cap. */
 export const MAX_MEMPOOL_TXS = 5_000;
 

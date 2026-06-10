@@ -33,7 +33,15 @@ export interface ChainBlock {
   block: Block;
   hash: Uint8Array;        // header hash, cached
   work: bigint;            // cumulative work up to and including this block
-  state: State;            // state AFTER applying this block
+  /**
+   * Account state AFTER applying this block, or `null` if not materialized.
+   * Snapshot-restore keeps every block's data in memory (for the explorer, P2P
+   * serving, etc.) but only materializes state for the snapshot anchor and the
+   * tail above it — the finalized prefix is left `null` to skip the costly
+   * per-block clone + apply. The tip is always materialized; only `parent.state`
+   * (when extending) and the snapshot writer ever read a non-tip block's state.
+   */
+  state: State | null;
 }
 
 /**
@@ -64,13 +72,24 @@ export class Blockchain {
   /** All known valid blocks, by hex header hash. */
   private blocks = new Map<string, ChainBlock>();
   /** The chain tip — the block with the highest cumulative work. */
-  private tipHash: string;
+  private tipHash!: string;
   /** Listeners invoked after a block is accepted (any branch). Hash-hex passed for keying. */
   private acceptListeners = new Set<(cb: ChainBlock) => void>();
   /** Listeners invoked only when the canonical tip moves, with the mempool delta. */
   private tipChangeListeners = new Set<(d: ReorgDelta) => void>();
+  /**
+   * Listeners fired when a block can only be validated against state below the
+   * snapshot anchor — state we don't hold after a snapshot restore. The node
+   * clears the persisted snapshot so the next load full-replays from genesis.
+   * Practically unreachable: it needs a reorg deeper than SNAPSHOT_DEPTH.
+   */
+  private snapshotInvalidatedListeners = new Set<() => void>();
 
   constructor() {
+    this.initGenesis();
+  }
+
+  private initGenesis(): void {
     const genHash = hashHeader(GENESIS.header);
     const genHashHex = bytesToHex(genHash);
     this.blocks.set(genHashHex, {
@@ -80,6 +99,15 @@ export class Blockchain {
       state: emptyState(),
     });
     this.tipHash = genHashHex;
+  }
+
+  /**
+   * Discard all in-memory blocks back to genesis only. Used to retry restore via
+   * a clean full replay after the snapshot fast-path aborts on any anomaly.
+   */
+  reset(): void {
+    this.blocks.clear();
+    this.initGenesis();
   }
 
   /** Subscribe to every accepted block (canonical or fork). Returns an unsubscribe fn. */
@@ -100,6 +128,12 @@ export class Blockchain {
     return () => this.tipChangeListeners.delete(fn);
   }
 
+  /** Subscribe to snapshot-invalidation (a reorg below the snapshot anchor). */
+  onSnapshotInvalidated(fn: () => void): () => void {
+    this.snapshotInvalidatedListeners.add(fn);
+    return () => this.snapshotInvalidatedListeners.delete(fn);
+  }
+
   get tip(): ChainBlock {
     return this.blocks.get(this.tipHash)!;
   }
@@ -108,9 +142,11 @@ export class Blockchain {
     return this.tip.block.header.height;
   }
 
-  /** State at the chain tip — do NOT mutate. */
+  /** State at the chain tip — do NOT mutate. The tip is always materialized. */
   get tipState(): State {
-    return this.tip.state;
+    const s = this.tip.state;
+    if (s === null) throw new Error('tip state not materialized'); // invariant violation
+    return s;
   }
 
   get tipDifficulty(): number {
@@ -161,15 +197,19 @@ export class Blockchain {
    * corruption / version-skew bugs.
    *
    * An attacker who can rewrite IndexedDB could also rewrite the running JS,
-   * so re-verifying PoW from IDB buys no real security — just latency.
+   * so re-verifying PoW from IDB buys no real security — just latency. By the
+   * same logic we skip the per-block stateRoot recompute (a full sort + merkle
+   * of every account, O(accounts) per block): the root was checked when the
+   * block was first accepted, and `applyBlockTxs` still runs so balance/nonce
+   * arithmetic is still validated.
    */
   async addValidatedBlock(block: Block): Promise<ValidationError | null> {
-    return this.addBlockInternal(block, { skipPoW: true, skipTxSig: true });
+    return this.addBlockInternal(block, { skipPoW: true, skipTxSig: true, skipStateRoot: true });
   }
 
   private async addBlockInternal(
     block: Block,
-    opts: { skipPoW: boolean; skipTxSig: boolean },
+    opts: { skipPoW: boolean; skipTxSig: boolean; skipStateRoot?: boolean },
   ): Promise<ValidationError | null> {
     const { header, transactions } = block;
     const hash = hashHeader(header);
@@ -207,6 +247,14 @@ export class Blockchain {
     if (compareBytes(expectedTxRoot, header.txRoot) !== 0) return 'txRoot mismatch';
 
     // Apply all txs against parent state into a clone, verify final stateRoot.
+    if (parent.state === null) {
+      // Parent is a finalized-prefix block whose state we didn't materialize on
+      // snapshot restore. Extending it means a reorg deeper than SNAPSHOT_DEPTH —
+      // we can't validate without that state. Signal the node to drop the
+      // snapshot and full-replay, and reject this block for now.
+      for (const fn of this.snapshotInvalidatedListeners) fn();
+      return 'parent state unavailable (reorg below snapshot anchor)';
+    }
     const newState = cloneState(parent.state);
     if (!opts.skipTxSig) {
       for (const tx of transactions) {
@@ -216,8 +264,10 @@ export class Blockchain {
     }
     const applyErr = applyBlockTxs(newState, header.height, header.miner, transactions);
     if (applyErr) return `apply: ${applyErr}`;
-    const finalRoot = stateRoot(newState);
-    if (compareBytes(finalRoot, header.stateRoot) !== 0) return 'stateRoot mismatch';
+    if (!opts.skipStateRoot) {
+      const finalRoot = stateRoot(newState);
+      if (compareBytes(finalRoot, header.stateRoot) !== 0) return 'stateRoot mismatch';
+    }
 
     // All good. Cache the block and update tip if this branch is now heaviest.
     const work = parent.work + blockWork(header.difficulty);
@@ -290,6 +340,63 @@ export class Blockchain {
   async addBlockWithPow(block: Block, powValid: boolean): Promise<ValidationError | null> {
     if (!powValid) return 'PoW invalid';
     return this.addBlockInternal(block, { skipPoW: true, skipTxSig: false });
+  }
+
+  /**
+   * Insert a previously-validated block from local storage WITHOUT re-validating
+   * or firing accept/tip listeners. The block's post-state is `state` — `null`
+   * for an ordinary finalized-prefix block (skips the costly clone + apply), or
+   * the materialized account state for the snapshot anchor so the tail can be
+   * replayed on top of it. Cumulative work is derived from the parent (cheap).
+   *
+   * Keeping the full block (with txs) in memory preserves the explorer, P2P
+   * block serving and wallet-history rebuild; only per-block *state* is skipped.
+   * Returns an error string if the parent isn't present yet (caller feeds blocks
+   * height-ascending so parents always precede children).
+   */
+  seedHistoricalBlock(block: Block, state: State | null): ValidationError | null {
+    const header = block.header;
+    const hash = hashHeader(header);
+    const hashHex = bytesToHex(hash);
+    if (this.blocks.has(hashHex)) return null; // idempotent
+
+    const parent = this.blocks.get(bytesToHex(header.prevHash));
+    if (!parent) return 'parent block unknown';
+
+    const work = parent.work + blockWork(header.difficulty);
+    this.blocks.set(hashHex, { block, hash, work, state });
+
+    if (state !== null) {
+      // The designated canonical anchor — force it to be the tip so the tail
+      // replays on it regardless of any equal-work fork at the same height.
+      this.tipHash = hashHex;
+    } else if (work > this.tip.work) {
+      this.tipHash = hashHex;
+    }
+    return null;
+  }
+
+  /**
+   * Capture the canonical block at `finalizedHeight` and its materialized state,
+   * for persisting a local state snapshot. Returns null if the chain doesn't
+   * reach that height or that block's state isn't materialized (so we never
+   * serialize a `null`-state prefix block).
+   */
+  snapshotAt(finalizedHeight: number): { hashHex: string; height: number; state: State } | null {
+    if (finalizedHeight <= 0) return null;
+    let cursor: string | undefined = this.tipHash;
+    while (cursor) {
+      const entry: ChainBlock | undefined = this.blocks.get(cursor);
+      if (!entry) return null;
+      const h = entry.block.header.height;
+      if (h === finalizedHeight) {
+        if (entry.state === null) return null;
+        return { hashHex: cursor, height: h, state: entry.state };
+      }
+      if (h <= finalizedHeight) return null; // walked past it (gap)
+      cursor = bytesToHex(entry.block.header.prevHash);
+    }
+    return null;
   }
 
   /** Number of stored blocks across all branches. Helpful for debugging/UI. */

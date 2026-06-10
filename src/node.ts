@@ -8,13 +8,20 @@ import { ServerSync } from './net/serverSync.js';
 import { loadServerLists, saveServerLists, type ServerLists } from './net/servers.js';
 import { BROWSERCOIN_NETWORK } from './net/network.js';
 import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
-import { getAccount } from './chain/state.js';
-import { blockReward, COIN } from './chain/genesis.js';
-import { decodeBlock, encodeBlock, type Block } from './chain/block.js';
-import { bytesToHex } from './util/binary.js';
+import {
+  deserializeState,
+  getAccount,
+  serializeState,
+  stateRoot,
+  type StateRow,
+} from './chain/state.js';
+import { blockReward, COIN, SNAPSHOT_DEPTH } from './chain/genesis.js';
+import { decodeBlock, encodeBlock, hashHeader, type Block } from './chain/block.js';
+import { bytesToHex, compareBytes } from './util/binary.js';
 import { ActivityIndex } from './ui/activityIndex.js';
 import {
   clearAll,
+  delMeta,
   getAllBlocksOrdered,
   getMeta,
   listCachedPeers,
@@ -22,7 +29,23 @@ import {
   putMeta,
   recordPeerFailure,
   recordPeerSeen,
+  type StoredBlock,
 } from './storage/idb.js';
+
+/**
+ * Persisted state snapshot. A LOCAL, regenerable performance cache: the full
+ * account state at a finalized block (SNAPSHOT_DEPTH below the tip) so a reopened
+ * tab can jump straight to that state instead of replaying every block's txs from
+ * genesis. Lives in the `meta` store (no DB schema bump). NOT a consensus
+ * checkpoint — see SNAPSHOT_DEPTH.
+ */
+interface StateSnapshot {
+  v: 1;
+  chainVersion: string;
+  finalizedHeight: number;
+  finalizedHashHex: string;
+  accounts: StateRow[]; // state AFTER the finalized block
+}
 
 /**
  * Version tag tied to PoW params + chain genesis. When the network does a
@@ -112,6 +135,9 @@ export class Node {
   private walletListeners = new Set<ChainListener>();
   private syncListeners = new Set<(s: SyncStatus) => void>();
   private blockMinedListeners = new Set<(info: MinedBlockInfo) => void>();
+  /** Debounce handle + last-written height for the persisted state snapshot. */
+  private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastSnapshotHeight = -1;
   private syncStatus: SyncStatus = {
     syncing: true,
     targetHeight: 0,
@@ -151,6 +177,18 @@ export class Node {
       this.mempool.pruneUnminable(this.chain.tipState);
       this.miner.refresh();
       this.emitChain();
+      // Refresh the persisted state snapshot so the next page load is fast.
+      this.scheduleSnapshot();
+    });
+
+    // A reorg deeper than SNAPSHOT_DEPTH needs finalized-prefix state we didn't
+    // materialize. Drop the snapshot so the next load full-replays from genesis
+    // (which materializes everything) — a refresh fully recovers. Practically
+    // unreachable given shallow real reorgs; this is a correctness backstop.
+    this.chain.onSnapshotInvalidated(() => {
+      console.warn('[node] snapshot invalidated by deep reorg; clearing — refresh to fully re-materialize');
+      void delMeta('stateSnapshot');
+      this.lastSnapshotHeight = -1;
     });
 
     this.miner = new MinerController(
@@ -202,6 +240,13 @@ export class Node {
    * validated when first stored. This turns a "refresh = 45 s re-sync" into
    * "refresh = <1 s replay from disk".
    *
+   * If a state snapshot is present (and valid for this build), we seed the
+   * finalized account state directly and only replay the unfinalized tail above
+   * the snapshot anchor — skipping the O(accounts)-per-block clone + apply for
+   * the whole finalized prefix. The prefix blocks are still loaded into memory
+   * (state left unmaterialized) so the explorer, P2P serving and wallet history
+   * keep working. Any snapshot anomaly falls back to a clean full replay.
+   *
    * If the stored chain version doesn't match this build (e.g. hard-fork),
    * IDB is wiped first.
    */
@@ -215,28 +260,140 @@ export class Node {
         return;
       }
 
+      // getAllBlocksOrdered uses the height index, so blocks arrive ascending.
       const stored = await getAllBlocksOrdered();
-      // getAllBlocksOrdered uses the height index, so blocks already arrive
-      // height-ascending.
-      let restored = 0;
-      for (const row of stored) {
-        let block;
+      if (stored.length === 0) return;
+
+      let usedSnapshot = false;
+      const snap = await getMeta<StateSnapshot>('stateSnapshot');
+      if (snap && snap.v === 1 && snap.chainVersion === CHAIN_VERSION && snap.finalizedHeight > 0) {
         try {
-          block = decodeBlock(row.encoded);
+          await this.replayWithSnapshot(stored, snap);
+          usedSnapshot = true;
         } catch (e) {
-          console.warn('[node] idb decode failed at h=', row.height, (e as Error).message);
-          continue;
+          // Any inconsistency → discard the partial seed + bad snapshot and replay
+          // from scratch. A fresh snapshot is rewritten once we settle on a tip.
+          console.warn('[node] snapshot restore failed; full replay:', (e as Error).message);
+          this.chain.reset();
+          void delMeta('stateSnapshot');
         }
-        const err = await this.chain.addValidatedBlock(block);
-        if (err === null) restored++;
-        else console.warn('[node] idb block rejected at h=', row.height, err);
       }
-      if (restored > 0) {
-        console.log(`[node] restored ${restored} blocks from idb; tip h=${this.chain.height}`);
+      if (!usedSnapshot) {
+        await this.fullReplay(stored);
+      } else {
+        // Prefix blocks were seeded without firing tip events, so the activity
+        // index missed them — rebuild it from the full in-memory canonical chain.
+        this.activityIndex.rebuild(this.wallet.address, this.chain.iterateCanonical());
+      }
+
+      if (this.chain.height > 0) {
+        console.log(
+          `[node] restored to tip h=${this.chain.height}${usedSnapshot ? ' (snapshot fast-path)' : ''}`,
+        );
         this.emitChain();
       }
     } catch (e) {
       console.warn('[node] idb restore failed:', (e as Error).message);
+    }
+  }
+
+  /** Replay every stored block with full per-block state apply (the slow path). */
+  private async fullReplay(stored: StoredBlock[]): Promise<void> {
+    for (const row of stored) {
+      if (row.height === 0) continue; // genesis is hardcoded
+      let block: Block;
+      try {
+        block = decodeBlock(row.encoded);
+      } catch (e) {
+        console.warn('[node] idb decode failed at h=', row.height, (e as Error).message);
+        continue;
+      }
+      const err = await this.chain.addValidatedBlock(block);
+      if (err) console.warn('[node] idb block rejected at h=', row.height, err);
+    }
+  }
+
+  /**
+   * Seed the chain from a state snapshot: prefix blocks (below the anchor) keep
+   * their data but no materialized state; the anchor gets the snapshot state;
+   * the tail above the anchor is replayed normally. Throws on any inconsistency
+   * (decode failure, missing anchor, stateRoot mismatch) so the caller can fall
+   * back to a clean full replay.
+   */
+  private async replayWithSnapshot(stored: StoredBlock[], snap: StateSnapshot): Promise<void> {
+    const anchorState = deserializeState(snap.accounts);
+    const finalizedHeight = snap.finalizedHeight;
+    let anchorSeeded = false;
+
+    for (const row of stored) {
+      if (row.height === 0) continue; // genesis is hardcoded
+      const block = decodeBlock(row.encoded); // throws → caller resets + full-replays
+      const hashHex = bytesToHex(hashHeader(block.header));
+
+      if (row.height < finalizedHeight) {
+        const err = this.chain.seedHistoricalBlock(block, null);
+        if (err) throw new Error(`seed h=${row.height}: ${err}`);
+      } else if (row.height === finalizedHeight) {
+        if (hashHex === snap.finalizedHashHex) {
+          // Integrity: the snapshot state must hash to this block's stateRoot.
+          if (compareBytes(stateRoot(anchorState), block.header.stateRoot) !== 0) {
+            throw new Error('snapshot stateRoot mismatch');
+          }
+          const err = this.chain.seedHistoricalBlock(block, anchorState);
+          if (err) throw new Error(`seed anchor: ${err}`);
+          anchorSeeded = true;
+        } else {
+          // A non-canonical fork at the anchor height — keep it, no state.
+          const err = this.chain.seedHistoricalBlock(block, null);
+          if (err) throw new Error(`seed fork h=${row.height}: ${err}`);
+        }
+      } else {
+        // Tail (above the anchor): replay with full state apply. The first tail
+        // block's parent is the materialized anchor.
+        const err = await this.chain.addValidatedBlock(block);
+        if (err) throw new Error(`tail h=${row.height}: ${err}`);
+      }
+    }
+
+    if (!anchorSeeded) throw new Error('snapshot anchor not found in idb');
+  }
+
+  /**
+   * Debounced refresh of the persisted state snapshot. Called on every canonical
+   * tip move; coalesces bursts (e.g. a sync catch-up) into a single write a few
+   * seconds after the chain settles.
+   */
+  private scheduleSnapshot(): void {
+    if (this.snapshotTimer !== null) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = setTimeout(() => {
+      this.snapshotTimer = null;
+      void this.writeSnapshot();
+    }, 5000);
+  }
+
+  /**
+   * Persist the account state at a finalized block (SNAPSHOT_DEPTH below the tip)
+   * so the next page load can skip replaying the finalized prefix. Best-effort:
+   * any failure just leaves the previous snapshot (or none) in place.
+   */
+  private async writeSnapshot(): Promise<void> {
+    try {
+      const finalizedHeight = this.chain.height - SNAPSHOT_DEPTH;
+      if (finalizedHeight <= 0) return; // chain too short to finalize anything
+      if (finalizedHeight === this.lastSnapshotHeight) return; // unchanged since last write
+      const at = this.chain.snapshotAt(finalizedHeight);
+      if (!at) return; // target not reached or not materialized
+      const snap: StateSnapshot = {
+        v: 1,
+        chainVersion: CHAIN_VERSION,
+        finalizedHeight: at.height,
+        finalizedHashHex: at.hashHex,
+        accounts: serializeState(at.state),
+      };
+      await putMeta('stateSnapshot', snap);
+      this.lastSnapshotHeight = finalizedHeight;
+    } catch (e) {
+      console.warn('[node] snapshot write failed:', (e as Error).message);
     }
   }
 

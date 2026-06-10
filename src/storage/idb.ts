@@ -59,7 +59,7 @@ function wrap<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
-interface StoredBlock {
+export interface StoredBlock {
   hash: string;       // hex
   height: number;
   encoded: Uint8Array; // raw block bytes
@@ -101,6 +101,16 @@ export async function putMeta(key: string, value: unknown): Promise<void> {
 export async function getMeta<T = unknown>(key: string): Promise<T | undefined> {
   const db = await open();
   return wrap(db.transaction(META_STORE).objectStore(META_STORE).get(key)) as Promise<T | undefined>;
+}
+
+export async function delMeta(key: string): Promise<void> {
+  const db = await open();
+  const tx = db.transaction(META_STORE, 'readwrite');
+  tx.objectStore(META_STORE).delete(key);
+  await new Promise<void>((res, rej) => {
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
 }
 
 export async function clearAll(): Promise<void> {
