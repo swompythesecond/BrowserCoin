@@ -400,6 +400,27 @@ label {
 .badge-confirmed { background: var(--green-soft); color: var(--green); border-color: var(--green); }
 .badge-mined     { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .badge-you       { background: var(--green-soft); color: var(--green); border-color: var(--green); padding: 1px 6px; font-size: 0.62rem; }
+.badge-in        { background: var(--green-soft); color: var(--green); border-color: var(--green); }
+.badge-out       { background: var(--red-soft); color: var(--red); border-color: var(--red); }
+
+/* ============ Explorer ============ */
+
+.explorer-search {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.explorer-search input { flex: 1; }
+.explorer-search-msg { margin-bottom: 10px; }
+.explorer-tabs { margin-bottom: 14px; }
+
+.spark {
+  display: block;
+  width: 100%;
+  height: 64px;
+}
+
+.table .rank { width: 1%; }
 
 /* ============ Tables ============ */
 

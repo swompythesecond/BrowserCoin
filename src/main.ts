@@ -99,7 +99,7 @@ router
   .route('/',         (host) => mountHome(host, node, router))
   .route('/wallet',   (host, params) => mountWallet(host, node, params))
   .route('/mine',     (host) => mountMiner(host, node))
-  .route('/explorer', (host) => mountExplorer(host, node))
+  .route('/explorer', (host, params) => mountExplorer(host, node, params, router))
   .route('/mempool',  (host) => mountMempool(host, node))
   .route('/about',    (host) => mountAbout(host))
   .route('/highlights', (host) => mountHighlights(host))

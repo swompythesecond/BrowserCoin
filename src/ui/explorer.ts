@@ -1,43 +1,157 @@
 import { hashHeader } from '../chain/block.js';
-import { bytesToHex, compactToTarget } from '../util/binary.js';
+import type { Transaction } from '../chain/transaction.js';
+import { txHash } from '../chain/transaction.js';
+import { bytesToHex } from '../util/binary.js';
 import { formatAmount } from '../node.js';
 import type { Node } from '../node.js';
 import { TICKER } from '../brand.js';
 import { cardHeader } from './info.js';
 import { renderPager } from './pager.js';
+import type { Router } from './router.js';
+import { getExplorerIndex, type ExplorerIndex } from './explorerIndex.js';
+import { addressLink, blockLink, difficultyBits, heightLink, txLink, type SubView } from './explorerShared.js';
+import { renderAddressView } from './explorerAddress.js';
+import { renderBlockView, renderTxView } from './explorerBlock.js';
+import { renderRichView } from './explorerRich.js';
+import { renderStatsView } from './explorerStats.js';
 
 const BLOCKS_PER_PAGE = 20;
 
-interface BlockRow {
-  height: number;
-  hash: string;
-  txCount: number;
-  miner: string;
-  ts: number;
-  totalFees: bigint;
-  difficulty: number;
-  txs: Array<{ from: string; to: string; amount: bigint; fee: bigint; nonce: number }>;
-}
-
-function difficultyBits(compact: number): number {
-  const target = compactToTarget(compact);
-  return target <= 0n ? 256 : 256 - target.toString(2).length;
-}
-
 /**
- * Explorer: paginated chain history (newest first) with click-to-expand rows
- * that reveal every transaction inside the block. Pending transactions live
- * on the dedicated /mempool tab.
+ * Explorer shell: a search box that understands addresses, heights, block
+ * hashes and tx hashes, plus tabbed sub-views (blocks / top holders / stats) and
+ * drill-in detail pages — all routed through `/explorer?…` query params so
+ * plain anchors deep-link and the back button works.
  */
-export function mountExplorer(host: HTMLElement, node: Node): () => void {
+export function mountExplorer(host: HTMLElement, node: Node, params: URLSearchParams, router: Router): () => void {
+  const index = getExplorerIndex(node.chain);
+  index.ensureFresh();
+
+  const address = params.get('address')?.trim().toLowerCase() ?? null;
+  const tx = params.get('tx')?.trim().toLowerCase() ?? null;
+  const block = params.get('block')?.trim().toLowerCase() ?? null;
+  const tab = params.get('tab');
+  const isDetail = !!(address || tx || block);
+
   const view = document.createElement('div');
   view.className = 'view';
   view.innerHTML = `
     <div class="view-header">
       <h2 class="view-title">Explorer</h2>
-      <span class="view-sub">Every block ever mined. Click a row to inspect its transactions.</span>
+      <span class="view-sub">Search any wallet, block or transaction — everything verified locally by your own node.</span>
     </div>
 
+    <form class="explorer-search" data-w="searchForm">
+      <input type="text" placeholder="Address / block height / block hash / tx hash" data-w="searchInput" spellcheck="false" autocomplete="off" />
+      <button type="submit">Search</button>
+    </form>
+    <div class="muted text-sm explorer-search-msg" data-w="searchMsg" hidden></div>
+
+    <div class="row explorer-tabs">
+      <div class="chips" data-w="tabs">
+        <button type="button" class="chip${!isDetail && !tab ? ' active' : ''}" data-tab="">Blocks</button>
+        <button type="button" class="chip${tab === 'holders' ? ' active' : ''}" data-tab="holders">Top holders</button>
+        <button type="button" class="chip${tab === 'stats' ? ' active' : ''}" data-tab="stats">Stats</button>
+      </div>
+    </div>
+
+    <div data-w="subview"></div>
+  `;
+  host.appendChild(view);
+
+  const searchForm = view.querySelector<HTMLFormElement>('[data-w="searchForm"]')!;
+  const searchInput = view.querySelector<HTMLInputElement>('[data-w="searchInput"]')!;
+  const searchMsg = view.querySelector<HTMLElement>('[data-w="searchMsg"]')!;
+  const subRoot = view.querySelector<HTMLElement>('[data-w="subview"]')!;
+
+  view.querySelectorAll<HTMLButtonElement>('[data-w="tabs"] .chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const t = chip.dataset['tab'];
+      router.navigate(t ? `/explorer?tab=${t}` : '/explorer');
+    });
+  });
+
+  searchForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const error = runSearch(searchInput.value, node, index, router);
+    searchMsg.hidden = !error;
+    searchMsg.textContent = error ?? '';
+  });
+
+  let sub: SubView;
+  if (address) sub = renderAddressView(subRoot, node, index, address);
+  else if (tx) sub = renderTxView(subRoot, node, index, tx);
+  else if (block) sub = renderBlockView(subRoot, node, index, block);
+  else if (tab === 'holders') sub = renderRichView(subRoot, node, index);
+  else if (tab === 'stats') sub = renderStatsView(subRoot, node, index);
+  else sub = renderBlocksView(subRoot, node);
+
+  function tick(): void {
+    index.ensureFresh();
+    sub.repaint();
+  }
+  const unsubChain = node.onChain(tick);
+  const ticker = setInterval(tick, 5000);
+  return () => {
+    unsubChain();
+    clearInterval(ticker);
+  };
+}
+
+/**
+ * Figure out what the user is looking for and navigate there. Returns an
+ * error/hint message instead when the query doesn't resolve.
+ */
+function runSearch(raw: string, node: Node, index: ExplorerIndex, router: Router): string | null {
+  let q = raw.trim().toLowerCase();
+  if (q.startsWith('0x')) q = q.slice(2);
+  if (!q) return null;
+
+  if (/^\d{1,10}$/.test(q)) {
+    const height = Number(q);
+    if (height > node.chain.height) return `Block #${height} doesn't exist yet — the chain is at #${node.chain.height}.`;
+    router.navigate(`/explorer?block=${height}`);
+    return null;
+  }
+
+  if (/^[0-9a-f]{64}$/.test(q)) {
+    // A 64-hex string is a block hash, a tx hash, or an address. Check the
+    // hash spaces first — any 32-byte value is at least a *possible* address,
+    // so that's the fallback.
+    if (node.chain.getBlock(q)) router.navigate(`/explorer?block=${q}`);
+    else if (index.findTx(q)) router.navigate(`/explorer?tx=${q}`);
+    else router.navigate(`/explorer?address=${q}`);
+    return null;
+  }
+
+  if (/^[0-9a-f]{8,63}$/.test(q)) {
+    const matches = index.knownAddressesWithPrefix(q, 2);
+    if (matches.length === 1) {
+      router.navigate(`/explorer?address=${matches[0]}`);
+      return null;
+    }
+    return matches.length === 0
+      ? 'No known address starts with that prefix. Paste the full 64-character address.'
+      : 'Several addresses start with that prefix — add a few more characters.';
+  }
+
+  return 'Enter an address, block height, block hash or transaction hash.';
+}
+
+// ---------- Default tab: the block list ----------
+
+interface BlockRow {
+  height: number;
+  hashHex: string;
+  minerHex: string;
+  ts: number;
+  totalFees: bigint;
+  difficulty: number;
+  txs: Transaction[];
+}
+
+function renderBlocksView(container: HTMLElement, node: Node): SubView {
+  container.innerHTML = `
     <section class="card" data-mount="blocks">
       <div data-slot="header"></div>
       <div class="row" style="justify-content:space-between;">
@@ -55,9 +169,8 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
       <div class="pager" data-w="blockPager"></div>
     </section>
   `;
-  host.appendChild(view);
 
-  view.querySelector<HTMLElement>('[data-mount="blocks"] [data-slot="header"]')!.replaceWith(cardHeader({
+  container.querySelector<HTMLElement>('[data-mount="blocks"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Blocks',
     info: {
       title: 'The chain',
@@ -65,10 +178,10 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
     },
   }));
 
-  const tipEl = view.querySelector<HTMLElement>('[data-w="tip"]')!;
-  const blockRowsEl = view.querySelector<HTMLTableSectionElement>('[data-w="blockRows"]')!;
-  const blockPagerEl = view.querySelector<HTMLElement>('[data-w="blockPager"]')!;
-  const blockCountEl = view.querySelector<HTMLElement>('[data-w="blockCount"]')!;
+  const tipEl = container.querySelector<HTMLElement>('[data-w="tip"]')!;
+  const blockRowsEl = container.querySelector<HTMLTableSectionElement>('[data-w="blockRows"]')!;
+  const blockPagerEl = container.querySelector<HTMLElement>('[data-w="blockPager"]')!;
+  const blockCountEl = container.querySelector<HTMLElement>('[data-w="blockCount"]')!;
 
   let blockPage = 0;
   const expanded = new Set<number>();
@@ -81,56 +194,32 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
       for (const tx of cb.block.transactions) fees += tx.fee;
       out.push({
         height: h.height,
-        hash: bytesToHex(hashHeader(h)).slice(0, 12) + '…',
-        txCount: cb.block.transactions.length,
-        miner: bytesToHex(h.miner).slice(0, 12) + '…',
+        hashHex: bytesToHex(cb.hash),
+        minerHex: bytesToHex(h.miner),
         ts: h.timestamp,
         totalFees: fees,
         difficulty: h.difficulty,
-        txs: cb.block.transactions.map((tx) => ({
-          from: bytesToHex(tx.from).slice(0, 12) + '…',
-          to: bytesToHex(tx.to).slice(0, 12) + '…',
-          amount: tx.amount,
-          fee: tx.fee,
-          nonce: tx.nonce,
-        })),
+        txs: cb.block.transactions,
       });
     }
     return out;
   }
 
-  function renderRows(rows: BlockRow[]): string {
-    if (rows.length === 0) return `<tr class="table-empty"><td colspan="7">No blocks yet.</td></tr>`;
-    return rows.map((b) => {
-      const detail = expanded.has(b.height)
-        ? `<tr><td colspan="7" style="background: var(--surface); padding: 0;">
-            <div style="padding: 12px 16px;">
-              <div class="label-caps" style="margin-bottom:8px;">${b.txs.length} transaction${b.txs.length === 1 ? '' : 's'}</div>
-              ${b.txs.length === 0
-                ? `<div class="muted text-sm" style="font-style:italic;">Coinbase only (block reward).</div>`
-                : `<div class="table-scroll"><table class="table">
-                    <thead><tr><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th><th class="col-hide-sm">nonce</th></tr></thead>
-                    <tbody>${b.txs.map((tx) => `<tr>
-                      <td class="addr">${tx.from}</td>
-                      <td class="addr col-hide-sm">${tx.to}</td>
-                      <td class="mono">${formatAmount(tx.amount)} ${TICKER}</td>
-                      <td class="mono muted col-hide-sm">${formatAmount(tx.fee)} ${TICKER}</td>
-                      <td class="mono muted col-hide-sm">${tx.nonce}</td>
-                    </tr>`).join('')}</tbody>
-                   </table></div>`}
-            </div>
-          </td></tr>`
-        : '';
-      return `<tr data-block="${b.height}" style="cursor:pointer;">
-        <td class="mono">${b.height}</td>
-        <td class="hash">${b.hash}</td>
-        <td class="mono">${b.txCount}</td>
-        <td class="addr col-hide-sm">${b.miner}</td>
-        <td class="mono muted col-hide-sm">${formatAmount(b.totalFees)}</td>
-        <td class="mono muted col-hide-sm" title="0x${b.difficulty.toString(16).padStart(8, '0')}">${difficultyBits(b.difficulty)} bits</td>
-        <td class="muted">${new Date(b.ts * 1000).toLocaleTimeString()}</td>
-      </tr>${detail}`;
-    }).join('');
+  function renderTxDetail(b: BlockRow): string {
+    if (b.txs.length === 0) {
+      return `<div class="muted text-sm" style="font-style:italic;">Coinbase only (block reward).</div>`;
+    }
+    return `<div class="table-scroll"><table class="table">
+      <thead><tr><th>tx</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th><th class="col-hide-sm">nonce</th></tr></thead>
+      <tbody>${b.txs.map((tx) => `<tr>
+        <td>${txLink(bytesToHex(txHash(tx)), bytesToHex(txHash(tx)).slice(0, 10) + '…')}</td>
+        <td>${addressLink(bytesToHex(tx.from))}</td>
+        <td class="col-hide-sm">${addressLink(bytesToHex(tx.to))}</td>
+        <td class="mono">${formatAmount(tx.amount)} ${TICKER}</td>
+        <td class="mono muted col-hide-sm">${formatAmount(tx.fee)} ${TICKER}</td>
+        <td class="mono muted col-hide-sm">${tx.nonce}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
   }
 
   function paint(): void {
@@ -141,10 +230,32 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
     const pages = Math.max(1, Math.ceil(blocks.length / BLOCKS_PER_PAGE));
     if (blockPage >= pages) blockPage = pages - 1;
     const slice = blocks.slice(blockPage * BLOCKS_PER_PAGE, (blockPage + 1) * BLOCKS_PER_PAGE);
-    blockRowsEl.innerHTML = renderRows(slice);
+
+    blockRowsEl.innerHTML = slice.length === 0
+      ? `<tr class="table-empty"><td colspan="7">No blocks yet.</td></tr>`
+      : slice.map((b) => {
+        const detail = expanded.has(b.height)
+          ? `<tr><td colspan="7" style="background: var(--surface); padding: 0;">
+              <div style="padding: 12px 16px;">
+                <div class="label-caps" style="margin-bottom:8px;">${b.txs.length} transaction${b.txs.length === 1 ? '' : 's'}</div>
+                ${renderTxDetail(b)}
+              </div>
+            </td></tr>`
+          : '';
+        return `<tr data-block="${b.height}" style="cursor:pointer;">
+          <td class="mono">${heightLink(b.height)}</td>
+          <td>${blockLink(b.hashHex)}</td>
+          <td class="mono">${b.txs.length}</td>
+          <td class="col-hide-sm">${addressLink(b.minerHex)}</td>
+          <td class="mono muted col-hide-sm">${formatAmount(b.totalFees)}</td>
+          <td class="mono muted col-hide-sm" title="0x${b.difficulty.toString(16).padStart(8, '0')}">${difficultyBits(b.difficulty)} bits</td>
+          <td class="muted">${new Date(b.ts * 1000).toLocaleTimeString()}</td>
+        </tr>${detail}`;
+      }).join('');
 
     blockRowsEl.querySelectorAll<HTMLElement>('tr[data-block]').forEach((row) => {
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
+        if ((e.target as Element | null)?.closest('a')) return; // let links navigate
         const h = Number(row.dataset['block']);
         if (expanded.has(h)) expanded.delete(h); else expanded.add(h);
         paint();
@@ -155,10 +266,5 @@ export function mountExplorer(host: HTMLElement, node: Node): () => void {
   }
 
   paint();
-  const unsubChain = node.onChain(paint);
-  const ticker = setInterval(paint, 5000);
-  return () => {
-    unsubChain();
-    clearInterval(ticker);
-  };
+  return { repaint: paint };
 }
