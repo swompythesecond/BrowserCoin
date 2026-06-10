@@ -315,23 +315,20 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     const myAddr = node.wallet.address;
     let sessionBlocks = 0;
     let sessionReward = 0n;
-    let lifetimeReward = 0n;
-    let scanned = 0;
+    // Session stats only need the blocks above the session's starting height —
+    // the walk is bounded by session length, not chain length.
     for (const cb of node.chain.iterateCanonical()) {
-      if (scanned++ > 2000) break;
       const h = cb.block.header;
-      if (h.height === 0) break;
+      if (h.height <= startHeight) break;
       if (bytesToHex(h.miner) !== myAddr) continue;
       let fees = 0n;
       for (const tx of cb.block.transactions) fees += tx.fee;
-      const reward = blockReward(h.height) + fees;
-      lifetimeReward += reward;
-      if (h.height > startHeight) {
-        sessionBlocks++;
-        sessionReward += reward;
-      }
+      sessionBlocks++;
+      sessionReward += blockReward(h.height) + fees;
     }
-    return { blocks: sessionBlocks, reward: sessionReward, lifetime: lifetimeReward };
+    // Lifetime comes from the incrementally-maintained activity index, which
+    // covers the whole chain (no recent-window cap) without a rescan.
+    return { blocks: sessionBlocks, reward: sessionReward, lifetime: node.activityIndex.minedTotal() };
   }
 
   function refreshDiagnostics(): void {

@@ -98,6 +98,15 @@ export class ActivityIndex {
     }
   }
 
+  /** Total rewards (subsidy + fees) of every canonical block this wallet mined. */
+  minedTotal(): bigint {
+    let total = 0n;
+    for (const rows of this.byBlock.values()) {
+      for (const r of rows) if (r.dir === 'mined') total += r.amount;
+    }
+    return total;
+  }
+
   /**
    * All confirmed + mined rows, newest-first. Mined rows' relative "when" is
    * recomputed on read so it doesn't freeze at the value from when the block
