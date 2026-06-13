@@ -43,7 +43,9 @@ void node.start();
 {
   const max = maxMinerWorkers();
   // New mode-aware settings, with sensible defaults for first-time users.
-  const mode = (localStorage.getItem('browsercoin:miner-mode') === 'manual') ? 'manual' : 'auto';
+  // Default to manual + full CPU + all cores: go full-blast out of the box,
+  // and only fall into the auto-tuner if the user explicitly picked it.
+  const mode = (localStorage.getItem('browsercoin:miner-mode') === 'auto') ? 'auto' : 'manual';
   // Default Max = all cores. With the new argon2id lib, OOM is rare enough
   // that "try to use everything" is the right default; the tuner backs off
   // automatically if the machine pushes back.
@@ -55,7 +57,7 @@ void node.start();
 
   // Legacy keys: meaningful in manual mode (and also used as the initial
   // workerCount/throttle when auto mode boots, before the tuner kicks in).
-  const rawThreads = Number(localStorage.getItem('browsercoin:miner-threads')) || autoMin;
+  const rawThreads = Number(localStorage.getItem('browsercoin:miner-threads')) || max;
   const threads = Math.max(1, Math.min(max, Math.floor(rawThreads)));
   const rawPctStr = localStorage.getItem('browsercoin:miner-throttle');
   const rawPct = rawPctStr === null ? 100 : Number(rawPctStr);

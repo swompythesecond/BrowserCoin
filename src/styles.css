@@ -617,6 +617,38 @@ label {
   accent-color: var(--accent);
 }
 
+/* ============ pop-out (picture-in-picture) miner ============ */
+/* These rules are copied into the Document Picture-in-Picture window along
+   with the rest of the stylesheet, so the floating widget inherits the same
+   tokens and component styles. The .pip-* selectors just tighten the layout
+   for the ~320x360 window. */
+.pip-body {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--text);
+  overflow: auto;
+}
+.pip-miner {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.pip-miner .hashrate { font-size: 2.1rem; margin: 2px 0; }
+.pip-miner .pip-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+.pip-miner .pip-toggle { width: 100%; margin: 4px 0 8px; }
+.pip-miner .pip-cpu {
+  align-self: flex-start;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 /* ============ kv ============ */
 
 .kv {

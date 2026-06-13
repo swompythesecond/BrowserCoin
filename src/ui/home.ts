@@ -12,6 +12,7 @@ import { openScanner } from './qrScanner.js';
 import { nextDifficulty } from '../chain/consensus.js';
 import { DIFFICULTY_WINDOW, MTP_WINDOW } from '../chain/genesis.js';
 import { isMiningOffline, openOfflineModal } from './miner.js';
+import { openPipMiner, pipMinerSupported } from './pip-miner.js';
 
 const PREVIEW_ROWS = 5;
 // Shared with the dedicated Mine view so the two stay in sync across reloads.
@@ -73,7 +74,10 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
             <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="diff">— bits</div>
             <div class="text-sm muted mt-sm" data-w="diffSub">target —</div>
           </div>
-          <button data-w="toggle">Start mining</button>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <button data-w="toggle">Start mining</button>
+            <button class="ghost small" data-w="popout" hidden>⧉ Pop out</button>
+          </div>
         </div>
         <div class="text-sm muted mt-md" data-w="eta">Press start to begin.</div>
         <div class="conn-strip conn-strip-small" data-w="connStrip" hidden></div>
@@ -239,6 +243,12 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     }
     node.miner.start();
   });
+
+  const popoutBtn = view.querySelector<HTMLButtonElement>('[data-mount="miner"] [data-w="popout"]')!;
+  if (pipMinerSupported()) {
+    popoutBtn.hidden = false;
+    popoutBtn.addEventListener('click', () => { void openPipMiner(node); });
+  }
 
   const cpuSlider = view.querySelector<HTMLInputElement>('[data-mount="miner"] [data-w="slider"]')!;
   const cpuPctEl = view.querySelector<HTMLElement>('[data-mount="miner"] [data-w="pct"]')!;

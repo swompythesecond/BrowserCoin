@@ -7,6 +7,7 @@ import { compactToTarget } from '../util/binary.js';
 import { bytesToHex } from '../util/binary.js';
 import { TICKER } from '../brand.js';
 import { cardHeader } from './info.js';
+import { openPipMiner, pipMinerSupported } from './pip-miner.js';
 
 const THREADS_KEY = 'browsercoin:miner-threads';
 const THROTTLE_KEY = 'browsercoin:miner-throttle';
@@ -40,8 +41,9 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       </div>
       <div class="hashrate" data-w="hashrate">0 <span class="hashrate-unit">H/s</span></div>
       <div class="nonce-ticker" data-w="ticker">— waiting —</div>
-      <div class="mt-md row" style="justify-content:center;">
+      <div class="mt-md row" style="justify-content:center; gap:10px;">
         <button data-w="toggle">Start mining</button>
+        <button class="ghost" data-w="popout" hidden>⧉ Pop out</button>
       </div>
     </section>
 
@@ -191,6 +193,13 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const tickerEl = view.querySelector<HTMLElement>('[data-w="ticker"]')!;
   const toggleBtn = view.querySelector<HTMLButtonElement>('[data-w="toggle"]')!;
   const connStrip = view.querySelector<HTMLElement>('[data-w="connStrip"]')!;
+
+  // Pop-out miner: only offered where Document Picture-in-Picture exists.
+  const popoutBtn = view.querySelector<HTMLButtonElement>('[data-w="popout"]')!;
+  if (pipMinerSupported()) {
+    popoutBtn.hidden = false;
+    popoutBtn.addEventListener('click', () => { void openPipMiner(node); });
+  }
 
   const blockEl = view.querySelector<HTMLElement>('[data-w="block"]')!;
   const txsEl = view.querySelector<HTMLElement>('[data-w="txs"]')!;
@@ -848,12 +857,12 @@ function clampPct(raw: string | null): number {
   if (!Number.isFinite(n)) return 100;
   return Math.max(0, Math.min(100, Math.round(n)));
 }
-function formatHashNumber(h: number): string {
+export function formatHashNumber(h: number): string {
   if (h < 1000) return h.toFixed(0);
   if (h < 1e6) return (h / 1e3).toFixed(2);
   return (h / 1e6).toFixed(2);
 }
-function formatHashUnit(h: number): string {
+export function formatHashUnit(h: number): string {
   if (h < 1000) return 'H/s';
   if (h < 1e6) return 'kH/s';
   return 'MH/s';
