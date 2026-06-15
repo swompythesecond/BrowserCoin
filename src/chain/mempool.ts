@@ -202,9 +202,10 @@ export class Mempool {
   }
 
   /**
-   * Pick a set of txs to include in the next block. Walks each sender's mineable
-   * prefix (contiguous, fundable nonces from the on-chain nonce), then sorts the
-   * resulting eligible set by fee-per-byte. Caps to `maxBytes` total.
+   * Pick a set of txs to include in the next block. For each sender we take its
+   * mineable prefix (contiguous, fundable nonces from the on-chain nonce), then
+   * pack senders in fee-priority order, keeping every sender's nonce sequence
+   * intact. Caps to `maxBytes` total.
    */
   selectForBlock(state: State, maxBytes: number): Transaction[] {
     // Group by sender.
@@ -215,25 +216,41 @@ export class Mempool {
       bySender.get(k)!.push(e);
     }
 
-    const eligible: MempoolEntry[] = [];
+    // A sender's mineable prefix is contiguous, fundable and nonce-ascending --
+    // the only run we can mine from this tip. It has to go into the block in
+    // nonce order with no gaps, or `applyBlockTxs` (which requires
+    // `tx.nonce === sender.nonce`) rejects the whole block. So we sort and pack
+    // by whole sender, never by individual tx: flattening every sender's txs
+    // into one list and sorting by fee-per-byte would let a sender's higher-fee
+    // later nonce jump ahead of its own earlier one, producing an invalid block.
+    const groups: Array<{ sender: string; txs: MempoolEntry[]; bestFee: bigint }> = [];
     for (const [sender, list] of bySender) {
-      // Only a sender's contiguous, fundable prefix can be mined from this tip.
-      eligible.push(...this.mineablePrefix(state, sender, list).keep);
+      const keep = this.mineablePrefix(state, sender, list).keep;
+      if (keep.length === 0) continue;
+      let bestFee = keep[0]!.feePerByte;
+      for (const e of keep) if (e.feePerByte > bestFee) bestFee = e.feePerByte;
+      groups.push({ sender, txs: keep, bestFee });
     }
 
-    // Now greedily pack by fee-per-byte (preserve sender-internal order via stable sort).
-    eligible.sort((a, b) => {
-      if (a.feePerByte !== b.feePerByte) return a.feePerByte > b.feePerByte ? -1 : 1;
-      // Same fee tier: keep nonce order so a sender's txs stay grouped.
-      return a.tx.nonce - b.tx.nonce;
+    // Prioritise senders by their best fee-per-byte; tie-break on sender id so
+    // the resulting template order is deterministic.
+    groups.sort((a, b) => {
+      if (a.bestFee !== b.bestFee) return a.bestFee > b.bestFee ? -1 : 1;
+      return a.sender < b.sender ? -1 : a.sender > b.sender ? 1 : 0;
     });
 
     const picked: Transaction[] = [];
     let bytesUsed = 0;
-    for (const e of eligible) {
-      if (bytesUsed + TX_ENCODED_LEN > maxBytes) break;
-      picked.push(e.tx);
-      bytesUsed += TX_ENCODED_LEN;
+    for (const group of groups) {
+      // Pack a sender's prefix from its nonce-start. If it doesn't fully fit we
+      // take the leading prefix (nonces stay contiguous) and stop -- never a
+      // middle slice, which would gap the sequence. Every tx is the same encoded
+      // size, so once one doesn't fit, neither does anything after it.
+      for (const e of group.txs) {
+        if (bytesUsed + TX_ENCODED_LEN > maxBytes) break;
+        picked.push(e.tx);
+        bytesUsed += TX_ENCODED_LEN;
+      }
     }
     return picked;
   }
