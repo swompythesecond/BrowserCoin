@@ -147,7 +147,7 @@ export function renderStatsView(container: HTMLElement, node: Node, index: Explo
         </div>
         <div class="stat-tile">
           <div class="stat-label">Addresses</div>
-          <div class="stat-value">${node.chain.tipState.size.toLocaleString()} <span class="muted">holders</span></div>
+          <div class="stat-value">${node.chain.tipState.accounts.size.toLocaleString()} <span class="muted">holders</span></div>
           <div class="stat-sub">${index.addressCount().toLocaleString()} ever seen on-chain</div>
         </div>
       </div>

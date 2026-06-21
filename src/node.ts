@@ -12,8 +12,10 @@ import {
   deserializeState,
   getAccount,
   serializeState,
+  serializeLocks,
   stateRoot,
   type StateRow,
+  type LockRow,
 } from './chain/state.js';
 import { blockReward, COIN, SNAPSHOT_DEPTH } from './chain/genesis.js';
 import { decodeBlock, encodeBlock, hashHeader, type Block } from './chain/block.js';
@@ -45,6 +47,7 @@ interface StateSnapshot {
   finalizedHeight: number;
   finalizedHashHex: string;
   accounts: StateRow[]; // state AFTER the finalized block
+  locks?: LockRow[];    // script locks live at the finalized block (omitted pre-fork / old snapshots)
 }
 
 /**
@@ -321,7 +324,7 @@ export class Node {
    * back to a clean full replay.
    */
   private async replayWithSnapshot(stored: StoredBlock[], snap: StateSnapshot): Promise<void> {
-    const anchorState = deserializeState(snap.accounts);
+    const anchorState = deserializeState(snap.accounts, snap.locks ?? []);
     const finalizedHeight = snap.finalizedHeight;
     let anchorSeeded = false;
 
@@ -389,6 +392,7 @@ export class Node {
         finalizedHeight: at.height,
         finalizedHashHex: at.hashHex,
         accounts: serializeState(at.state),
+        locks: serializeLocks(at.state),
       };
       await putMeta('stateSnapshot', snap);
       this.lastSnapshotHeight = finalizedHeight;

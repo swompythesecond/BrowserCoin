@@ -1,5 +1,6 @@
 import type { Node } from '../node.js';
 import { cardHeader } from './info.js';
+import { forkCountdown, forkAdoptionText, forkActivationDateUTC } from './forkStatus.js';
 
 export function mountNetwork(host: HTMLElement, node: Node): () => void {
   const view = document.createElement('div');
@@ -42,8 +43,28 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
         </p>
       </section>
     </div>
+
+    <section class="card mt-md" data-mount="fork">
+      <div data-slot="header"></div>
+      <div class="row" style="justify-content:space-between;align-items:baseline;">
+        <span data-w="fork-state" class="mono">—</span>
+        <span data-w="fork-date" class="muted text-sm">—</span>
+      </div>
+      <p class="text-sm muted" style="margin:8px 0 0;">
+        Adoption: <span data-w="fork-adoption" class="mono">—</span>. The switch is driven by the
+        chain's own clock (median-time-past), so every up-to-date node flips together.
+      </p>
+    </section>
   `;
   host.appendChild(view);
+
+  view.querySelector<HTMLElement>('[data-mount="fork"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Script hard-fork',
+    info: {
+      title: 'The script upgrade',
+      body: `Adds safe spend conditions (hash locks, time locks, multisig) for atomic swaps, vaults and escrow. It's a coordinated rule change on the SAME chain — your balances and mining history are untouched. Update before the switch date; non-updated tabs will fork off when scripts go live.`,
+    },
+  }));
 
   view.querySelector<HTMLElement>('[data-mount="status"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Connection',
@@ -67,6 +88,9 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
   const sizeEl = view.querySelector<HTMLElement>('[data-w="netsize"]')!;
   const mempoolEl = view.querySelector<HTMLElement>('[data-w="mempool"]')!;
   const serverEl = view.querySelector<HTMLElement>('[data-w="server"]')!;
+  const forkStateEl = view.querySelector<HTMLElement>('[data-w="fork-state"]')!;
+  const forkDateEl = view.querySelector<HTMLElement>('[data-w="fork-date"]')!;
+  const forkAdoptionEl = view.querySelector<HTMLElement>('[data-w="fork-adoption"]')!;
 
   let netUnsub: (() => void) | null = null;
   let syncUnsub: (() => void) | null = null;
@@ -115,9 +139,16 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     } else {
       serverEl.textContent = '—';
     }
+
+    const cd = forkCountdown();
+    forkStateEl.textContent = cd.line;
+    forkStateEl.className = cd.activated ? 'green mono' : 'mono';
+    forkDateEl.textContent = forkActivationDateUTC();
+    forkAdoptionEl.textContent = forkAdoptionText(ps?.serverForkReadyCount ?? 0, ps?.serverPeerCount ?? 0);
   }
 
   render();
+  const countdownTick = setInterval(render, 1000);
   const unsubChain = node.onChain(render);
   hookNetwork();
   hookSync();
@@ -132,5 +163,6 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     netUnsub?.();
     syncUnsub?.();
     clearInterval(hookInterval);
+    clearInterval(countdownTick);
   };
 }

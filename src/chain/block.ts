@@ -1,7 +1,7 @@
 import { sha256 } from '../crypto/hash.js';
 import { concat, u32be, u64be, readU32be, readU64be } from '../util/binary.js';
 import { merkleRoot } from '../util/merkle.js';
-import { decodeTx, encodeTx, type Transaction, TX_ENCODED_LEN } from './transaction.js';
+import { decodeTx, encodeTx, encodedTxLen, type Transaction } from './transaction.js';
 
 export interface BlockHeader {
   height: number;       // u32
@@ -87,5 +87,7 @@ export function decodeBlock(buf: Uint8Array): Block {
 
 /** Encoded block size in bytes — used to enforce MAX_BLOCK_BYTES. */
 export function blockSize(b: Block): number {
-  return HEADER_LEN + 4 + b.transactions.length * TX_ENCODED_LEN;
+  let txBytes = 0;
+  for (const t of b.transactions) txBytes += encodedTxLen(t);
+  return HEADER_LEN + 4 + txBytes;
 }

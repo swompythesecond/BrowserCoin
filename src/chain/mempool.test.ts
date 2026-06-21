@@ -10,8 +10,8 @@ const BIG_BUDGET = 1 << 20; // plenty of room — these tests never hit the size
 
 /** Build a state keyed by address-hex (addresses ARE pubkeys in our chain). */
 function stateWith(entries: Array<{ addr: string; balance: bigint; nonce: number }>): State {
-  const s: State = new Map();
-  for (const e of entries) s.set(e.addr, { balance: e.balance, nonce: e.nonce });
+  const s: State = { accounts: new Map(), locks: new Map() };
+  for (const e of entries) s.accounts.set(e.addr, { balance: e.balance, nonce: e.nonce });
   return s;
 }
 

@@ -99,6 +99,8 @@ export interface PeerStatus {
   serverPeerCount: number;
   /** Active miners across the network as last reported by helper servers. */
   serverMinersActive: number;
+  /** Nodes running a fork-ready build, as last reported by helper servers. */
+  serverForkReadyCount: number;
   /** Per-signaling-server liveness so the UI can show "K/L signaling up." */
   signalingServers: SignalingPeerStatus[];
 }
@@ -204,6 +206,7 @@ export class PeerNetwork {
       bestPeerHeight: 0,
       serverPeerCount: 0,
       serverMinersActive: 0,
+      serverForkReadyCount: 0,
       signalingServers: signalingServers.map((url) => ({ url, open: false })),
     };
   }
@@ -963,10 +966,12 @@ export class PeerNetwork {
       id: this.myId,
       height: this.chain.height,
       mining: this.isMining(),
+      forkReady: true, // this build ships the script-fork rules
     });
     if (stats) {
       this.status.serverPeerCount = stats.peerCount;
       this.status.serverMinersActive = stats.minersActive;
+      this.status.serverForkReadyCount = stats.forkReadyCount ?? 0;
       this.emit();
     }
   }

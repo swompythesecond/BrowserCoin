@@ -57,11 +57,15 @@ export interface HeartbeatPayload {
   id: string;
   height: number;
   mining: boolean;
+  /** This build understands the script hard-fork rules. Old builds omit it. */
+  forkReady?: boolean;
 }
 
 export interface NetworkStats {
   peerCount: number;
   minersActive: number;
+  /** How many reporting nodes are running a fork-ready build (adoption gauge). */
+  forkReadyCount?: number;
 }
 
 /**

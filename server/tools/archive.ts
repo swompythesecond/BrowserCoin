@@ -43,8 +43,10 @@ import { decodeBlock, encodeBlock } from '../../src/chain/block.js';
 import {
   deserializeState,
   serializeState,
+  serializeLocks,
   stateRoot,
   type StateRow,
+  type LockRow,
 } from '../../src/chain/state.js';
 import { bytesToHex, compareBytes, hexToBytes } from '../../src/util/binary.js';
 import { BROWSERCOIN_NETWORK } from '../../src/net/network.js';
@@ -85,6 +87,7 @@ interface SnapshotFile {
   height: number;
   hashHex: string;
   accounts: StateRow[]; // state AFTER block `height`
+  locks?: LockRow[];    // script locks live at block `height` (omitted pre-fork)
 }
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -224,7 +227,7 @@ async function loadArchive(dir: string, chunkSize: number): Promise<LoadedArchiv
         // The archived tip carries the snapshot state. Trustless: the state's
         // recomputed merkle root must equal the header's stateRoot, which the
         // block's (already-archived) PoW commits to.
-        const state = deserializeState(snapshot.accounts);
+        const state = deserializeState(snapshot.accounts, snapshot.locks ?? []);
         if (compareBytes(stateRoot(state), block.header.stateRoot) !== 0) {
           throw new Error('snapshot.json stateRoot does not match archived tip header');
         }
@@ -311,6 +314,7 @@ async function flush(dir: string, chain: Blockchain, prev: LoadedArchive, chunkS
     height: newHeight,
     hashHex: bytesToHex(chain.tip.hash),
     accounts: serializeState(chain.tipState),
+    locks: serializeLocks(chain.tipState),
   };
   await writeJsonAtomic(path.join(dir, 'snapshot.json'), snapshot);
 
