@@ -3,10 +3,8 @@ import type { Node } from '../node.js';
 import { TICKER } from '../brand.js';
 import { renderPager } from './pager.js';
 import type { ExplorerIndex } from './explorerIndex.js';
-import { addressLink, circulatingSupply, percentOf, type SubView } from './explorerShared.js';
+import { addressLink, burnBadge, circulatingSupply, percentOf, type SubView } from './explorerShared.js';
 import { isBurnAddress } from '../chain/burnAddresses.js';
-
-const BURN_BADGE = ' <span class="badge" style="background:#b4231f;border-color:#b4231f;color:#fff;">burn</span>';
 
 const ROWS_PER_PAGE = 25;
 
@@ -38,7 +36,7 @@ export function renderRichView(container: HTMLElement, node: Node, index: Explor
               ? `<tr class="table-empty"><td colspan="5">No balances yet — mine the first block!</td></tr>`
               : slice.map((r, i) => `<tr${r.address === you ? ' class="row-mine"' : ''}>
                 <td class="mono muted rank">${page * ROWS_PER_PAGE + i + 1}</td>
-                <td>${addressLink(r.address)}${r.address === you ? ' <span class="badge badge-you">you</span>' : ''}${isBurnAddress(r.address) ? BURN_BADGE : ''}</td>
+                <td>${addressLink(r.address)}${r.address === you ? ' <span class="badge badge-you">you</span>' : ''}${isBurnAddress(r.address) ? ' ' + burnBadge() : ''}</td>
                 <td class="mono">${formatAmount(r.balance)} ${TICKER}</td>
                 <td class="mono muted col-hide-sm">${percentOf(r.balance, supply)}%</td>
                 <td class="mono muted col-hide-sm">${r.nonce}</td>

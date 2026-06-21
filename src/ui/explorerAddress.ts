@@ -10,7 +10,7 @@ import { TICKER } from '../brand.js';
 import { blockTime, timeAgo } from './activityIndex.js';
 import { renderPager } from './pager.js';
 import type { ExplorerIndex, TxRef } from './explorerIndex.js';
-import { addressLink, heightLink, txLink, type SubView } from './explorerShared.js';
+import { addressLink, burnBadge, heightLink, txLink, type SubView } from './explorerShared.js';
 import { downsample, sparklineSVG } from './sparkline.js';
 
 const HISTORY_PER_PAGE = 25;
@@ -129,7 +129,7 @@ export function renderAddressView(container: HTMLElement, node: Node, index: Exp
         <div class="card-header">
           <h3 class="card-title">Address</h3>
           ${isYou ? '<span class="badge badge-you">you</span>' : ''}
-          ${burn ? '<span class="badge" style="background:#b4231f;border-color:#b4231f;color:#fff;">burn</span>' : ''}
+          ${burn ? burnBadge() : ''}
           <span class="card-spacer"></span>
           <button type="button" class="ghost small" data-w="copy">Copy</button>
         </div>
