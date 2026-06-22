@@ -70,11 +70,34 @@ export const Op = {
   OP_CHECKSIGVERIFY: 0xad,
   OP_CHECKMULTISIG: 0xae,
   // Locktime.
-  OP_CHECKLOCKTIMEVERIFY: 0xb1,
+  OP_CHECKLOCKTIMEVERIFY: 0xb1, // (Bitcoin's OP_NOP2 slot)
+  // Reserved no-ops (the OP_NOP family). These do NOTHING today, on purpose:
+  // reserving them now means a FUTURE upgrade can give one a VERIFY-style
+  // meaning as a SOFT fork instead of a hard fork. Old nodes keep treating it
+  // as a no-op and accept the spend; new nodes enforce the added check (which
+  // can only abort a spend, never enable one). That is exactly how Bitcoin
+  // shipped CLTV and CSV. Any opcode NOT reserved here still fails closed, so
+  // we don't accidentally accept genuinely-unknown bytecode.
+  OP_NOP: 0x61,
+  OP_NOP1: 0xb0,
+  OP_NOP3: 0xb2, // reserved for a future relative-timelock (CSV-style) soft fork
+  OP_NOP4: 0xb3,
+  OP_NOP5: 0xb4,
+  OP_NOP6: 0xb5,
+  OP_NOP7: 0xb6,
+  OP_NOP8: 0xb7,
+  OP_NOP9: 0xb8,
+  OP_NOP10: 0xb9,
 } as const;
 
 const OP_PUSHDATA1 = Op.OP_PUSHDATA1;
 const OP_PUSH_MAX = 0x4b; // largest direct-push opcode (push 0x01..0x4b bytes)
+
+/** Opcodes intentionally treated as no-ops, reserved for future soft forks. */
+const RESERVED_NOPS: ReadonlySet<number> = new Set([
+  Op.OP_NOP, Op.OP_NOP1, Op.OP_NOP3, Op.OP_NOP4, Op.OP_NOP5,
+  Op.OP_NOP6, Op.OP_NOP7, Op.OP_NOP8, Op.OP_NOP9, Op.OP_NOP10,
+]);
 
 // ---------------------------------------------------------------------------
 // Limits. Chosen comfortably above what the real scripts need, low enough that
@@ -226,6 +249,9 @@ export function evalScript(
     if (!exec) continue;
 
     if (++opCount > MAX_OPS) return fail('op count exceeded');
+
+    // Reserved no-ops: consume the opcode and do nothing (soft-fork upgrade slot).
+    if (RESERVED_NOPS.has(op)) continue;
 
     switch (op) {
       case Op.OP_1:

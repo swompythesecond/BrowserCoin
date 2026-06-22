@@ -205,6 +205,20 @@ describe('script: limits and malleability', () => {
   it('rejects unknown opcode', () => {
     expect(evalScript(new Uint8Array([0xff]), [], ctx()).ok).toBe(false);
   });
+
+  it('reserved NOP opcodes are no-ops (soft-fork slots)', () => {
+    expect(evalScript(asm(op(Op.OP_1), op(Op.OP_NOP)), [], ctx()).ok).toBe(true);
+    expect(evalScript(asm(op(Op.OP_NOP1), op(Op.OP_1)), [], ctx()).ok).toBe(true);
+    // A NOP must not disturb the stack: <a> NOP <a> EQUAL → true.
+    const a = new Uint8Array([7, 7, 7]);
+    expect(evalScript(asm(push(a), op(Op.OP_NOP3), push(a), op(Op.OP_EQUAL)), [], ctx()).ok).toBe(true);
+    // Every reserved slot is accepted.
+    for (const nop of [Op.OP_NOP, Op.OP_NOP1, Op.OP_NOP3, Op.OP_NOP4, Op.OP_NOP5, Op.OP_NOP6, Op.OP_NOP7, Op.OP_NOP8, Op.OP_NOP9, Op.OP_NOP10]) {
+      expect(evalScript(asm(op(nop), op(Op.OP_1)), [], ctx()).ok).toBe(true);
+    }
+    // A non-reserved opcode in the same region still fails closed.
+    expect(evalScript(asm(op(0xba), op(Op.OP_1)), [], ctx()).ok).toBe(false);
+  });
   it('rejects non-minimal CLTV number (leading zero)', () => {
     const s = asm(push(new Uint8Array([0x00, 0x10])), op(Op.OP_CHECKLOCKTIMEVERIFY), op(Op.OP_DROP), op(Op.OP_1));
     expect(evalScript(s, [], ctx({ blockHeight: 9999 })).ok).toBe(false);
