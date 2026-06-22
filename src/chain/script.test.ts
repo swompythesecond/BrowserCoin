@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateKeyPair, sign } from '../crypto/keys.js';
-import { sha256 } from '../crypto/hash.js';
+import { sha256, ripemd160, hash160 } from '../crypto/hash.js';
 import { concat } from '../util/binary.js';
 import {
   Op,
@@ -219,9 +219,67 @@ describe('script: limits and malleability', () => {
     // A non-reserved opcode in the same region still fails closed.
     expect(evalScript(asm(op(0xba), op(Op.OP_1)), [], ctx()).ok).toBe(false);
   });
-  it('rejects non-minimal CLTV number (leading zero)', () => {
-    const s = asm(push(new Uint8Array([0x00, 0x10])), op(Op.OP_CHECKLOCKTIMEVERIFY), op(Op.OP_DROP), op(Op.OP_1));
+  it('rejects non-minimal CLTV number (redundant high byte)', () => {
+    // Little-endian: [0x10, 0x00] is 16 with a redundant trailing zero byte → non-minimal.
+    const s = asm(push(new Uint8Array([0x10, 0x00])), op(Op.OP_CHECKLOCKTIMEVERIFY), op(Op.OP_DROP), op(Op.OP_1));
     expect(evalScript(s, [], ctx({ blockHeight: 9999 })).ok).toBe(false);
+  });
+});
+
+describe('script: expanded opcodes', () => {
+  const ok = (s: Uint8Array, w: Uint8Array[] = []) => evalScript(s, w, ctx()).ok;
+
+  it('hashes: SHA256, HASH256, RIPEMD160, HASH160', () => {
+    const m = new TextEncoder().encode('msg');
+    expect(ok(asm(push(m), op(Op.OP_HASH256), push(sha256(sha256(m))), op(Op.OP_EQUAL)))).toBe(true);
+    expect(ok(asm(push(m), op(Op.OP_RIPEMD160), push(ripemd160(m)), op(Op.OP_EQUAL)))).toBe(true);
+    expect(ok(asm(push(m), op(Op.OP_HASH160), push(hash160(m)), op(Op.OP_EQUAL)))).toBe(true);
+  });
+
+  it('OP_SIZE pushes element length without consuming it', () => {
+    const m = new Uint8Array(5);
+    expect(ok(asm(push(m), op(Op.OP_SIZE), push(encodeNum(5n)), op(Op.OP_NUMEQUAL)))).toBe(true);
+  });
+
+  it('arithmetic incl. signed/negative results', () => {
+    expect(ok(asm(op(Op.OP_2), op(Op.OP_3), op(Op.OP_ADD), push(encodeNum(5n)), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_3), op(Op.OP_5), op(Op.OP_SUB), push(encodeNum(-2n)), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(push(encodeNum(-7n)), op(Op.OP_ABS), op(Op.OP_7), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_4), op(Op.OP_NEGATE), push(encodeNum(-4n)), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_1ADD), op(Op.OP_2), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1ADD)))).toBe(false); // OP_1ADD on empty stack fails
+  });
+
+  it('comparisons: lessthan, min, max, within', () => {
+    expect(ok(asm(op(Op.OP_3), op(Op.OP_5), op(Op.OP_LESSTHAN)))).toBe(true);
+    expect(ok(asm(op(Op.OP_5), op(Op.OP_3), op(Op.OP_LESSTHAN)))).toBe(false);
+    expect(ok(asm(op(Op.OP_3), op(Op.OP_5), op(Op.OP_MIN), op(Op.OP_3), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_3), op(Op.OP_5), op(Op.OP_MAX), op(Op.OP_5), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_4), op(Op.OP_2), op(Op.OP_6), op(Op.OP_WITHIN)))).toBe(true);
+    expect(ok(asm(op(Op.OP_6), op(Op.OP_2), op(Op.OP_6), op(Op.OP_WITHIN)))).toBe(false);
+  });
+
+  it('stack ops: OVER, ROT, NIP, TUCK, PICK, ROLL, 2DUP, DEPTH, IFDUP', () => {
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_2), op(Op.OP_OVER), op(Op.OP_1), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_7), op(Op.OP_8), op(Op.OP_9), op(Op.OP_DEPTH), op(Op.OP_3), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_2), op(Op.OP_3), op(Op.OP_ROT), op(Op.OP_1), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_2), op(Op.OP_NIP), op(Op.OP_2), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_2), op(Op.OP_TUCK), op(Op.OP_DEPTH), op(Op.OP_3), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_10), op(Op.OP_11), op(Op.OP_12), op(Op.OP_2), op(Op.OP_PICK), op(Op.OP_10), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_10), op(Op.OP_11), op(Op.OP_12), op(Op.OP_2), op(Op.OP_ROLL), op(Op.OP_10), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_1), op(Op.OP_2), op(Op.OP_2DUP), op(Op.OP_DEPTH), op(Op.OP_4), op(Op.OP_NUMEQUAL)))).toBe(true);
+    expect(ok(asm(op(Op.OP_5), op(Op.OP_IFDUP), op(Op.OP_DROP), op(Op.OP_5), op(Op.OP_NUMEQUAL)))).toBe(true);
+  });
+
+  it('alt stack round-trips a value', () => {
+    expect(ok(asm(op(Op.OP_9), op(Op.OP_TOALTSTACK), op(Op.OP_1), op(Op.OP_DROP), op(Op.OP_FROMALTSTACK), op(Op.OP_9), op(Op.OP_NUMEQUAL)))).toBe(true);
+  });
+
+  it('OP_PUSHDATA2 pushes a 520-byte element (max size)', () => {
+    const big = new Uint8Array(520).fill(7);
+    const lenLE = new Uint8Array([520 & 0xff, (520 >> 8) & 0xff]);
+    const s = concat(op(Op.OP_PUSHDATA2), lenLE, big, op(Op.OP_SIZE), push(encodeNum(520n)), op(Op.OP_NUMEQUAL));
+    expect(ok(s)).toBe(true);
   });
 });
 
