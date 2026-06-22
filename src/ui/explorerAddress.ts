@@ -1,5 +1,6 @@
 import { blockReward, COIN } from '../chain/genesis.js';
 import { getAccount } from '../chain/state.js';
+import { getBurnAddressInfo } from '../chain/burnAddresses.js';
 import type { Transaction } from '../chain/transaction.js';
 import { txHash } from '../chain/transaction.js';
 import { bytesToHex } from '../util/binary.js';
@@ -9,7 +10,7 @@ import { TICKER } from '../brand.js';
 import { blockTime, timeAgo } from './activityIndex.js';
 import { renderPager } from './pager.js';
 import type { ExplorerIndex, TxRef } from './explorerIndex.js';
-import { addressLink, heightLink, txLink, type SubView } from './explorerShared.js';
+import { addressLink, burnBadge, heightLink, txLink, type SubView } from './explorerShared.js';
 import { downsample, sparklineSVG } from './sparkline.js';
 
 const HISTORY_PER_PAGE = 25;
@@ -110,6 +111,7 @@ export function renderAddressView(container: HTMLElement, node: Node, index: Exp
     const stats = index.getAddress(addrHex);
     const refs = stats?.refs ?? [];
     const isYou = addrHex === node.wallet.address;
+    const burn = getBurnAddressInfo(addrHex);
     const firstSeen = refs.length ? refs[0]!.ts : null;
     const lastSeen = refs.length ? refs[refs.length - 1]!.ts : null;
     const pending = pendingRows();
@@ -127,12 +129,23 @@ export function renderAddressView(container: HTMLElement, node: Node, index: Exp
         <div class="card-header">
           <h3 class="card-title">Address</h3>
           ${isYou ? '<span class="badge badge-you">you</span>' : ''}
+          ${burn ? burnBadge() : ''}
           <span class="card-spacer"></span>
           <button type="button" class="ghost small" data-w="copy">Copy</button>
         </div>
         <div class="hash" style="word-break:break-all;">${addrHex}</div>
         ${refs.length === 0 ? `<p class="muted text-sm mt-md">This address has no on-chain history${acct.balance > 0n ? '' : ' and a zero balance'}.</p>` : ''}
       </section>
+
+      ${burn ? `
+      <section class="card mt-md" style="border-left:3px solid #b4231f;">
+        <div class="card-header">
+          <h3 class="card-title">${burn.label}</h3>
+          <span class="card-spacer"></span>
+          <span class="muted text-sm">${formatAmount(acct.balance)} ${TICKER} burned</span>
+        </div>
+        <p class="muted text-sm mt-md" style="margin-bottom:0;">${burn.description}</p>
+      </section>` : ''}
 
       <div class="grid grid-3 mt-md explorer-tiles">
         <div class="stat-tile accent">

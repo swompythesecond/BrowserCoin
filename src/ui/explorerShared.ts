@@ -55,6 +55,17 @@ export function percentOf(part: bigint, total: bigint): string {
   return (Number((part * 10_000n) / total) / 100).toFixed(2);
 }
 
+/** Hover explanation shown on every "burn" badge across the explorer. */
+export const BURN_TOOLTIP =
+  'Burn address: coins sent here are permanently destroyed. The address is not a valid '
+  + 'public key, so no one can ever hold its private key or sign a spend from it. The coins '
+  + 'are removed from circulation forever.';
+
+/** Red "burn" badge with a hover tooltip explaining what a burn address is. */
+export function burnBadge(): string {
+  return `<span class="badge" style="background:#b4231f;border-color:#b4231f;color:#fff;cursor:help;" title="${BURN_TOOLTIP}">burn</span>`;
+}
+
 /** A view fragment the explorer shell repaints on chain changes + ticks. */
 export interface SubView {
   repaint(): void;

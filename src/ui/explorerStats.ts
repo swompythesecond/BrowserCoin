@@ -6,6 +6,7 @@ import {
   blockReward,
 } from '../chain/genesis.js';
 import { txHash } from '../chain/transaction.js';
+import { isBurnAddress } from '../chain/burnAddresses.js';
 import { bytesToHex } from '../util/binary.js';
 import { formatAmount } from '../node.js';
 import type { Node } from '../node.js';
@@ -14,6 +15,7 @@ import { blockTime } from './activityIndex.js';
 import type { BlockSummary, ExplorerIndex } from './explorerIndex.js';
 import {
   addressLink,
+  burnBadge,
   circulatingSupply,
   difficultyBits,
   heightLink,
@@ -177,7 +179,7 @@ export function renderStatsView(container: HTMLElement, node: Node, index: Explo
               : stats.largest.map((t) => `<tr>
                 <td>${txLink(t.hashHex, t.hashHex.slice(0, 10) + '…')}</td>
                 <td>${addressLink(t.fromHex)}</td>
-                <td class="col-hide-sm">${addressLink(t.toHex)}</td>
+                <td class="col-hide-sm">${addressLink(t.toHex)}${isBurnAddress(t.toHex) ? ' ' + burnBadge() : ''}</td>
                 <td class="mono">${formatAmount(t.amount)} ${TICKER}</td>
                 <td>${heightLink(t.height)}</td>
                 <td class="muted col-hide-sm">${blockTime(t.ts)}</td>
