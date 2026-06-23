@@ -49,7 +49,7 @@ export function extractBlockRows(block: Block, myAddr: string): ActivityRow[] {
       counterparty: short(sent ? toHex : fromHex),
       amount: sent ? -(tx.amount + tx.fee) : tx.amount,
       fee: sent ? tx.fee : 0n,
-      when: `block #${h.height}`,
+      when: blockTime(h.timestamp),
       sortKey: sortBase,
     });
   }
@@ -108,15 +108,15 @@ export class ActivityIndex {
   }
 
   /**
-   * All confirmed + mined rows, newest-first. Mined rows' relative "when" is
-   * recomputed on read so it doesn't freeze at the value from when the block
-   * was indexed.
+   * All confirmed + mined rows, newest-first. The relative "when" is recomputed
+   * on read (from the block timestamp in sortKey) so it stays fresh instead of
+   * freezing at the value from when the block was indexed.
    */
   rows(): ActivityRow[] {
     const out: ActivityRow[] = [];
     for (const rows of this.byBlock.values()) {
       for (const r of rows) {
-        out.push(r.dir === 'mined' ? { ...r, when: blockTime(Math.floor(r.sortKey / 1000)) } : r);
+        out.push({ ...r, when: blockTime(Math.floor(r.sortKey / 1000)) });
       }
     }
     out.sort((a, b) => b.sortKey - a.sortKey);
