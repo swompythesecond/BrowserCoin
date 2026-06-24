@@ -549,29 +549,33 @@ The interpreter (`src/chain/script.ts`) is a stack machine: witness items load o
 
 **Reserved** — `OP_NOP` (0x61), `OP_NOP1` (0xb0), `OP_NOP3`–`OP_NOP10` (0xb2–0xb9) do nothing today. They are reserved so a future rule can give one meaning as a soft fork (old nodes keep accepting a spend, new nodes enforce the added check). Any opcode *not* in this engine fails closed.
 
-### 11.8 Worked example — hash lock
+### 11.8 Hash locks — safely
 
-A hash lock releases coins to anyone who can reveal a secret. The script is `OP_SHA256 <h> OP_EQUAL`, where `h = sha256(preimage)`:
+> **⚠ A *bare* hash lock is anyone-can-take.** `OP_SHA256 <h> OP_EQUAL` releases coins to whoever reveals a preimage of `h` — and a redeem reveals that preimage publicly in the mempool. A watcher can copy it into their own redeem, point it at their own address, and win by paying a higher fee (the pool keeps only the highest-fee redeem per lock, `mempool.ts`). **Never use a bare hash lock to pay a specific party.** It exists only as a teaching example (`hashlockScript` in `src/chain/scriptBuild.ts`, marked demonstration-only).
 
-```
-redeemScript: a8 20 <32-byte h> 87
-              │  │  │            └ OP_EQUAL
-              │  │  └ the committed hash h
-              │  └ push 32 bytes
-              └ OP_SHA256
-```
-
-- **Lock:** set `scriptHash = sha256(redeemScript)`, sign and submit a Lock for `amount`.
-- **Redeem:** reveal the same `redeemScript` and set `witness = [preimage]`. The engine pushes `preimage`, runs `OP_SHA256` → `sha256(preimage)`, pushes `h`, and `OP_EQUAL` checks they match.
-
-A real pair from a test chain:
+**Hash-locked payment (the safe form).** Bind the spend to the recipient's key. The signature commits to `to`/`amount`/`fee` via the redeem sighash (§11.4), so revealing the secret no longer lets anyone redirect the coins:
 
 ```
-redeemScript: a820d3cc9de122e6316b3760586f64d083c99e87e78d1f1fdcf9357dd4d55388455687
-witness[0]:   1650699ec10b59f6bee7c65b67e382280730c84a1bce297dce96619bda9a71a0   (the preimage)
+redeemScript: OP_SHA256 <h> OP_EQUALVERIFY <recipientPubkey> OP_CHECKSIG
+witness:      [<signature over the redeem sighash>, <preimage>]
 ```
 
-The in-app **Scripts** tab builds and submits exactly this (guided, plus a raw-hex mode and a full opcode reference), and the explorer disassembles and explains any Lock/Redeem it renders.
+Stack walk: the witness seeds `[sig, preimage]` → `OP_SHA256` hashes the preimage → `<h> OP_EQUALVERIFY` aborts unless it matches → push `<recipientPubkey>` → `OP_CHECKSIG` verifies `sig` over `ctx.sighash`. A front-runner who copies the preimage still can't sign for a different `to` without the private key. Builder: `hashlockSigScript`; the in-app **Scripts** tab produces exactly this.
+
+**Atomic swap (full HTLC).** Add a refund branch so the sender can reclaim after a timeout if the swap never completes. Builder: `htlcScript` in `src/chain/scriptBuild.ts`.
+
+```
+OP_IF
+  OP_SHA256 <h> OP_EQUALVERIFY <recipientPubkey> OP_CHECKSIG     # claim: secret + recipient sig
+OP_ELSE
+  <locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP <senderPubkey> OP_CHECKSIG   # refund: after timeout
+OP_ENDIF
+```
+
+- **Claim** — `witness = [<recipientSig>, <preimage>, 1]` (the trailing `1` selects the `OP_IF` branch).
+- **Refund** — `witness = [<senderSig>, <empty>]`; valid only once the block's height (`locktime < 500,000,000`) or median-time-past (`≥`) has reached `locktime`.
+
+Sharing one `h` across two such locks on two chains is an atomic swap: claiming on one chain publishes the secret that unlocks the other, and the timeouts guarantee both parties can always either complete or refund. All three forms above are exercised in `src/chain/htlc.test.ts`. The explorer disassembles and explains any Lock/Redeem it renders, flagging bare hash locks as front-runnable and signature-gated ones as safe.
 
 ## 12. Stability
 

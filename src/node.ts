@@ -2,6 +2,9 @@ import { Blockchain } from './chain/blockchain.js';
 import { Mempool } from './chain/mempool.js';
 import { signTx, signLock, lockIdOf, redeemSighash, TxKind, type Transaction } from './chain/transaction.js';
 import { scriptHash } from './chain/script.js';
+import { hashlockSigScript } from './chain/scriptBuild.js';
+import { sign as signMessage } from './crypto/keys.js';
+import { sha256 } from './crypto/hash.js';
 import { type KeyPair } from './crypto/keys.js';
 import { MinerController } from './miner/controller.js';
 import { PeerNetwork } from './net/peer.js';
@@ -744,6 +747,45 @@ export class Node {
     // redeemSighash is what a signature-based witness would sign over; surfaced
     // here so a future signed-template builder can reuse this path unchanged.
     void redeemSighash(tx);
+    return this.submit(tx);
+  }
+
+  /**
+   * Redeem a hash-locked PAYMENT (`OP_SHA256 <h> OP_EQUALVERIFY <pubkey>
+   * OP_CHECKSIG`) addressed to this wallet's key. Reconstructs the script from
+   * the secret `preimage` + our own pubkey, signs the spend (binding `to`,
+   * amount and fee so it can't be front-run), and submits. The lock must have
+   * been created for our key, or the script hash won't match.
+   */
+  redeemHashlock(lockIdHex: string, preimage: Uint8Array, toAddress: Uint8Array, feeWww: string): string | null {
+    const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
+    if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
+    const redeemScript = hashlockSigScript(sha256(preimage), this.wallet.publicKey);
+    if (compareBytes(scriptHash(redeemScript), lock.scriptHash) !== 0) {
+      return 'this lock is not payable to your key with that secret';
+    }
+    let fee: bigint;
+    try {
+      fee = parseAmount(feeWww);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    if (fee > lock.amount) return 'fee exceeds the locked amount';
+    const tx: Transaction = {
+      kind: TxKind.Redeem,
+      from: new Uint8Array(32),
+      to: toAddress,
+      amount: lock.amount,
+      fee,
+      nonce: 0,
+      signature: new Uint8Array(0),
+      lockId: hexToBytes(lockIdHex.toLowerCase()),
+      redeemScript,
+      witness: [],
+    };
+    // Sign the sighash (which commits to `to`/amount/fee), then witness = [sig, preimage].
+    const sig = signMessage(redeemSighash(tx), this.wallet.privateKey);
+    tx.witness = [sig, preimage];
     return this.submit(tx);
   }
 

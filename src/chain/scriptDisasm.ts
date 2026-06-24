@@ -87,7 +87,7 @@ export function disassemble(script: Uint8Array): string[] {
   return out;
 }
 
-export type ScriptTemplate = 'hashlock' | 'timelock' | 'signature' | 'multisig' | 'empty' | 'custom';
+export type ScriptTemplate = 'hashlock' | 'hashlock-sig' | 'timelock' | 'signature' | 'multisig' | 'empty' | 'custom';
 
 export interface ScriptExplanation {
   template: ScriptTemplate;
@@ -122,7 +122,26 @@ export function explainScript(script: Uint8Array): ScriptExplanation {
   }
   const { tokens } = tokenize(script);
 
-  // Hashlock: <HASHOP> <push hash> OP_EQUAL
+  // Hash-locked payment (safe HTLC leaf): <HASHOP> <hash> OP_EQUALVERIFY <pubkey> OP_CHECKSIG
+  if (
+    tokens.length === 5 &&
+    tokens[0]!.op in HASH_OPS &&
+    tokens[1]!.name === 'PUSH' &&
+    tokens[2]!.op === Op.OP_EQUALVERIFY &&
+    tokens[3]!.name === 'PUSH' &&
+    tokens[4]!.op === Op.OP_CHECKSIG
+  ) {
+    const alg = HASH_OPS[tokens[0]!.op]!;
+    const h = bytesToHex(tokens[1]!.data!);
+    const k = bytesToHex(tokens[3]!.data!);
+    return {
+      template: 'hashlock-sig',
+      title: 'Hash-locked payment',
+      summary: `Spendable only by the holder of key ${k.slice(0, 12)}… who also reveals the secret for the ${alg} hash ${h.slice(0, 12)}…. The signature binds the destination, so it's safe for atomic swaps.`,
+    };
+  }
+
+  // Bare hashlock: <HASHOP> <push hash> OP_EQUAL — anyone-can-claim, front-runnable.
   if (
     tokens.length === 3 &&
     tokens[0]!.op in HASH_OPS &&
@@ -133,8 +152,8 @@ export function explainScript(script: Uint8Array): ScriptExplanation {
     const h = bytesToHex(tokens[1]!.data!);
     return {
       template: 'hashlock',
-      title: 'Hash lock',
-      summary: `Spendable by anyone who reveals the secret whose ${alg} hash is ${h.slice(0, 16)}…. Used for atomic swaps and payment channels.`,
+      title: 'Bare hash lock',
+      summary: `⚠ Spendable by ANYONE who reveals the secret whose ${alg} hash is ${h.slice(0, 12)}…. Because a redeem reveals the secret publicly, it can be front-run — not safe for paying a specific party. Demonstration only.`,
     };
   }
 

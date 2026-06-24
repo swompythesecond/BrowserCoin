@@ -1,7 +1,7 @@
 import type { Node } from '../node.js';
 import { TICKER } from '../brand.js';
 import { sha256 } from '../crypto/hash.js';
-import { hashlockScript } from '../chain/scriptBuild.js';
+import { hashlockSigScript } from '../chain/scriptBuild.js';
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import { cardHeader } from './info.js';
 import { scriptPanel } from './explorerScript.js';
@@ -25,10 +25,11 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     <section class="card" data-mount="intro">
       <div data-slot="header"></div>
       <p class="text-sm muted" style="margin:0;">
-        A <b>hash lock</b> sends coins into a vault that opens for anyone who can reveal a secret whose
-        SHA-256 hash was committed up front. Lock coins with a secret phrase, share the phrase with
-        someone (or keep it), and whoever knows it can redeem the coins to any address. This is the
-        building block behind atomic swaps and payment channels.
+        A <b>hash-locked payment</b> releases coins to one specific recipient — but only once they
+        reveal a shared secret. It commits to both the secret's hash <em>and</em> the recipient's key,
+        so the recipient must sign to claim. That signature binds the destination, so even though
+        redeeming reveals the secret publicly, no one else can grab the coins. This is the building
+        block behind atomic swaps.
       </p>
     </section>
 
@@ -37,6 +38,8 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
         <div data-slot="header"></div>
         <label>Amount to lock (${TICKER})</label>
         <input data-w="c-amount" placeholder="1.0" />
+        <label class="mt-sm">Recipient address (who may claim)</label>
+        <input data-w="c-to" spellcheck="false" />
         <label class="mt-sm">Secret phrase</label>
         <div class="row">
           <input data-w="c-secret" placeholder="something only the right person knows" />
@@ -111,24 +114,24 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     view.querySelector<HTMLElement>(`[data-mount="${key}"] [data-slot="header"]`)!.replaceWith(header);
   };
   slot('intro', cardHeader({
-    title: 'Hash locks',
+    title: 'Hash-locked payments',
     info: {
       title: 'What is a script?',
-      body: `Normally a coin is guarded by one key. A script lets you guard it with a small program instead — here, "whoever reveals the secret". The coins are locked under only the hash of that condition; the full condition is revealed and checked when someone redeems it.`,
+      body: `Normally a coin is guarded by one key. A script guards it with a small program. A hash-locked payment requires two things to claim: the recipient's signature AND a shared secret. The signature is what makes it safe — it binds the spend to the recipient, so revealing the secret on-chain doesn't let anyone else grab the coins. (A "bare" hash lock with no signature is front-runnable; it lives only in the Advanced section, marked demonstration-only.)`,
     },
   }));
   slot('create', cardHeader({
-    title: 'Create a hash lock',
+    title: 'Create a hash-locked payment',
     info: {
       title: 'Locking coins',
-      body: `Pick an amount and a secret phrase. We hash the phrase twice — once to make the secret, once more to make the public commitment baked into the lock. Anyone who later knows the phrase can redeem the coins. Keep it safe: there's no recovery.`,
+      body: `Pick an amount, the recipient's address, and a secret phrase. The lock commits to the secret's hash and the recipient's key. Only that recipient can claim, and only once they know the secret. Keep the secret safe — there's no recovery, but note a wrong recipient can never claim it either.`,
     },
   }));
   slot('redeem', cardHeader({
-    title: 'Redeem a hash lock',
+    title: 'Redeem a hash-locked payment',
     info: {
       title: 'Unlocking coins',
-      body: `Paste the lock's ID, the secret phrase it was made with, and where to send the coins. Your node reconstructs the script and the witness from the phrase, and broadcasts the redeem. It must be mined like any transaction.`,
+      body: `Paste the lock's ID, the secret phrase, and where to send the coins. Your node rebuilds the script from the secret + your own key, signs the spend (which binds the destination), and broadcasts it. Only the wallet the lock was addressed to can succeed.`,
     },
   }));
   slot('raw', cardHeader({
@@ -150,29 +153,35 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
 
   // ----- Create -----
   const cAmount = $<HTMLInputElement>('c-amount');
+  const cTo = $<HTMLInputElement>('c-to');
   const cSecret = $<HTMLInputElement>('c-secret');
   const cFee = $<HTMLInputElement>('c-fee');
   const cPreview = $('c-preview');
   const cMsg = $('c-msg');
   const cResult = $('c-result');
+  cTo.value = node.wallet.address; // default: a lock you can redeem yourself (handy for testing)
 
-  /** Derive the hashlock pieces from a secret phrase. */
-  function derive(phrase: string): { preimage: Uint8Array; script: Uint8Array } {
-    const preimage = sha256(new TextEncoder().encode(phrase));
-    const script = hashlockScript(sha256(preimage));
-    return { preimage, script };
+  /** The secret preimage derived from a phrase (SHA-256 of the UTF-8 text). */
+  function preimageOf(phrase: string): Uint8Array {
+    return sha256(new TextEncoder().encode(phrase));
+  }
+  /** The hash-locked-payment script binding the secret to a recipient's key. */
+  function scriptFor(phrase: string, recipient: Uint8Array): Uint8Array {
+    return hashlockSigScript(sha256(preimageOf(phrase)), recipient);
   }
 
   function renderPreview(): void {
     const phrase = cSecret.value;
-    if (!phrase) {
-      cPreview.innerHTML = `<span class="muted text-sm">Enter a secret to see the generated script.</span>`;
+    const to = cTo.value.trim().toLowerCase();
+    if (!phrase || !/^[0-9a-f]{64}$/.test(to)) {
+      cPreview.innerHTML = `<span class="muted text-sm">Enter a recipient address and a secret to see the generated script.</span>`;
       return;
     }
-    cPreview.innerHTML = scriptPanel(derive(phrase).script);
+    cPreview.innerHTML = scriptPanel(scriptFor(phrase, hexToBytes(to)));
   }
 
   cSecret.addEventListener('input', renderPreview);
+  cTo.addEventListener('input', renderPreview);
   $('c-rand').addEventListener('click', () => {
     const r = new Uint8Array(12);
     crypto.getRandomValues(r);
@@ -184,16 +193,18 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     cMsg.textContent = '';
     cResult.hidden = true;
     const phrase = cSecret.value.trim();
-    if (!phrase) { cMsg.textContent = 'Enter a secret phrase.'; return; }
-    const { script } = derive(phrase);
-    const res = node.lock(cAmount.value.trim(), cFee.value.trim(), script);
+    const to = cTo.value.trim().toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(to)) { cMsg.textContent = 'Enter a valid 64-hex recipient address.'; cMsg.className = 'text-sm red'; return; }
+    if (!phrase) { cMsg.textContent = 'Enter a secret phrase.'; cMsg.className = 'text-sm red'; return; }
+    const res = node.lock(cAmount.value.trim(), cFee.value.trim(), scriptFor(phrase, hexToBytes(to)));
     if (typeof res === 'string') { cMsg.textContent = res; cMsg.className = 'text-sm red'; return; }
     cMsg.textContent = 'Locked! Mining will confirm it shortly.';
     cMsg.className = 'text-sm green';
     cResult.hidden = false;
-    cResult.innerHTML = `Lock ID (share with the redeemer): <span class="hash">${res.lockId}</span><br>
-      <span class="muted">Keep the secret phrase safe — anyone who has it can redeem these coins.</span>`;
-    // Pre-fill the redeem form so the round-trip is one click away.
+    cResult.innerHTML = `Lock ID (share with the recipient): <span class="hash">${res.lockId}</span><br>
+      <span class="muted">Only the recipient's wallet can claim it, using the secret — the signed spend can't be front-run.</span>`;
+    // Pre-fill the redeem form so the round-trip is one click away (works here because
+    // the recipient defaults to your own address).
     rLock.value = res.lockId;
     rSecret.value = phrase;
   });
@@ -214,8 +225,9 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     if (!/^[0-9a-f]{64}$/.test(lockId)) { rMsg.textContent = 'Lock ID must be 64 hex characters.'; rMsg.className = 'text-sm red'; return; }
     if (!phrase) { rMsg.textContent = 'Enter the secret phrase.'; rMsg.className = 'text-sm red'; return; }
     if (!/^[0-9a-f]{64}$/.test(to)) { rMsg.textContent = 'Recipient must be a 64-hex address.'; rMsg.className = 'text-sm red'; return; }
-    const { preimage, script } = derive(phrase);
-    const err = node.redeem(lockId, hexToBytes(to), rFee.value.trim(), script, [preimage]);
+    // Your node reconstructs the script from the secret + your own key and signs
+    // the spend, so the redeem is bound to you and can't be front-run.
+    const err = node.redeemHashlock(lockId, preimageOf(phrase), hexToBytes(to), rFee.value.trim());
     if (err) { rMsg.textContent = err; rMsg.className = 'text-sm red'; return; }
     rMsg.textContent = 'Redeem submitted! It will pay out once mined.';
     rMsg.className = 'text-sm green';
