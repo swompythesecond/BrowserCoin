@@ -62,7 +62,7 @@ export function renderActivityRows(rows: ActivityRow[]): string {
         <td class="mono col-hide-sm">${arrow} ${r.dir}</td>
         <td class="addr">${r.counterparty}</td>
         <td class="mono ${cls}">${sign}${formatAmount(abs)} ${TICKER}</td>
-        <td class="muted col-hide-sm">${r.when}</td>
+        <td class="muted col-hide-sm" title="${new Date(r.sortKey).toLocaleString()}">${r.when}</td>
       </tr>`;
     })
     .join('');
