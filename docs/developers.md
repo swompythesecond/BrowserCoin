@@ -144,6 +144,8 @@ Send every ≤ 30 s; entries are dropped after 60 s of silence.
 
 A transaction is **152 bytes**, big-endian. See `src/chain/transaction.ts`.
 
+> **This is the base Transfer.** **Lock** and **Redeem** (script) transactions use different, self-identifying, variable-length encodings and only become valid once the script hard-fork activates — see §11.
+
 | Offset | Length | Field | Notes |
 |---|---|---|---|
 | 0 | 4 | `chainId` | Always `0xc01dfeed`. Included in the signed preimage to block cross-chain replay. |
@@ -382,7 +384,196 @@ Neither helper is an authority. Every block they accept is validated by the loca
 
 **Run a stats bot.** Just `GET /stats` on an interval.
 
-## 11. Stability
+## 11. Script transactions (Lock / Redeem)
+
+Two transaction kinds extend the base Transfer with programmable spend conditions: a **Lock** sends coins into a script-guarded output, and a **Redeem** spends it by satisfying that script. This is BrowserCoin's "programmable money" layer — hash locks, time locks, multisig, escrow. Source: `src/chain/transaction.ts`, `src/chain/script.ts`, `src/chain/state.ts`.
+
+### 11.1 Activation
+
+Script txs are a **time-gated rule extension on the same chain** — they do not reset balances or history. A Lock or Redeem is only valid in a block whose **median-time-past** (BIP113-style, computed from the chain itself, not a wall clock) has reached `FORK1_ACTIVATION_TIME` (`src/chain/genesis.ts`, unix seconds). Before activation both kinds are rejected (`lock tx before fork activation` / `redeem tx before fork activation`), so upgraded and non-upgraded nodes agree until the date, then flip together. The gate is `scriptsActiveForMtp` in `src/chain/fork.ts`.
+
+### 11.2 The two-step model
+
+1. **Lock** — `from` debits `amount + fee` and creates a lock holding `amount`, committed to `scriptHash = sha256(redeemScript)`. The script itself is *not* published yet, only its hash. Signed by `from`, ordered by `nonce` like a Transfer. The lock's id is the Lock's txid.
+2. **Redeem** — reveals the full `redeemScript` (which must hash to the lock's `scriptHash`) plus a `witness` (the stack inputs that satisfy it), paying `amount − fee` to `to`. It has no `from` / `nonce` / `signature`; replay protection is the one-shot consumption of the lock. A lock is **not** spendable in the same block it was created.
+
+### 11.3 Lock wire format (156 bytes)
+
+Self-identifying tag `0x4c4f434b` ('LOCK'). Big-endian.
+
+| Offset | Len | Field | Notes |
+|---|---|---|---|
+| 0 | 4 | tag | `0x4c4f434b` |
+| 4 | 4 | chainId | `0xc01dfeed` |
+| 8 | 32 | from | locker pubkey |
+| 40 | 8 | amount | u64 wei locked |
+| 48 | 8 | fee | u64 wei |
+| 56 | 4 | nonce | u32, sender-ordered |
+| 60 | 32 | scriptHash | `sha256(redeemScript)` |
+| **92** | 64 | signature | Ed25519 over bytes `[0, 92)` |
+
+Signed preimage = bytes `[0, 92)` (`lockPreimage`). **Lock id** = `sha256(full 156-byte encoding)`.
+
+### 11.4 Redeem wire format (variable length)
+
+Tag `0x52444d31` ('RDM1'). The wire encoding carries **no chainId** field, but the redeem sighash binds it (below).
+
+| Offset | Len | Field | Notes |
+|---|---|---|---|
+| 0 | 4 | tag | `0x52444d31` |
+| 4 | 32 | lockId | the lock being spent |
+| 36 | 32 | to | recipient pubkey |
+| 68 | 8 | amount | u64 — must equal the lock's amount exactly |
+| 76 | 8 | fee | u64 — ≤ amount |
+| 84 | 2 | scriptLen | u16 length of `redeemScript` |
+| 86 | scriptLen | redeemScript | revealed bytecode |
+| 86+scriptLen | 1 | witnessCount | u8 number of witness items |
+| … | per item | witness | each: u16 length ‖ bytes |
+
+**Redeem sighash** (what `OP_CHECKSIG`-style witnesses sign over) = `sha256(tag ‖ chainId ‖ lockId ‖ to ‖ amount ‖ fee ‖ redeemScript)`. It commits the destination and value, so a signature can't be replayed to redirect funds. See `redeemSighash` in `src/chain/transaction.ts`.
+
+### 11.5 Redeem validation
+
+A redeem is accepted only if (`applyRedeem` in `src/chain/state.ts`):
+
+- the lock exists and is unspent (else `unknown or already-spent lock`);
+- the lock was created in an **earlier** block (`lock not spendable in its creation block`);
+- `sha256(redeemScript) == lock.scriptHash` (`redeem script does not match lock`);
+- `amount == lock.amount` (`redeem amount mismatch`);
+- `fee ≤ amount` (`redeem fee exceeds locked amount`);
+- `evalScript(redeemScript, witness, ctx)` finishes with a truthy value on top of the stack.
+
+`ctx` is `{ sighash, blockHeight, blockMtp }`; `blockHeight` and `blockMtp` feed `OP_CHECKLOCKTIMEVERIFY`.
+
+### 11.6 Script engine & limits
+
+The interpreter (`src/chain/script.ts`) is a stack machine: witness items load onto the stack first (pure data, never executed), then the redeem script runs. It succeeds if the top item is truthy at the end. There are no loops or backward jumps, so execution always terminates. Limits (chosen to match Bitcoin so raising them later stays a soft fork):
+
+| Limit | Value |
+|---|---|
+| Max script size | 10 000 bytes |
+| Max witness items | 100 |
+| Max push / witness item | 520 bytes |
+| Max stack (main + alt) | 1 000 |
+| Max non-push ops | 201 |
+| Max multisig keys | 20 |
+| Max numeric operand | 4 bytes |
+| Locktime height/time split | 500 000 000 |
+
+### 11.7 Opcodes
+
+`script.ts` is authoritative; the semantics below follow Bitcoin Script.
+
+**Pushing data** — bytes `0x01`–`0x4b` push that many literal bytes directly.
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_0 | 0x00 | Push an empty value (canonical "false"). |
+| OP_1 … OP_16 | 0x51–0x60 | Push the small integer 1 through 16. |
+| OP_PUSHDATA1 | 0x4c | Push N bytes; next 1 byte is the length N. |
+| OP_PUSHDATA2 | 0x4d | Push N bytes; next 2 bytes (little-endian) are the length N. |
+
+**Flow control**
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_IF | 0x63 | Run the next branch if the top value is true. |
+| OP_ELSE | 0x67 | Alternative branch for the matching OP_IF. |
+| OP_ENDIF | 0x68 | Close an OP_IF / OP_ELSE block. |
+| OP_VERIFY | 0x69 | Pop the top value; abort the script unless it is true. |
+
+**Stack**
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_DUP | 0x76 | Duplicate the top item. |
+| OP_DROP | 0x75 | Remove the top item. |
+| OP_SWAP | 0x7c | Swap the top two items. |
+| OP_OVER | 0x78 | Copy the second-from-top item to the top. |
+| OP_ROT | 0x7b | Rotate the top three items. |
+| OP_TUCK | 0x7d | Copy the top item to just below the second. |
+| OP_NIP | 0x77 | Remove the second-from-top item. |
+| OP_IFDUP | 0x73 | Duplicate the top item only if it is non-zero. |
+| OP_2DUP | 0x6e | Duplicate the top two items. |
+| OP_DEPTH | 0x74 | Push the current stack size. |
+| OP_PICK | 0x79 | Copy the Nth-from-top item to the top (N from stack). |
+| OP_ROLL | 0x7a | Move the Nth-from-top item to the top (N from stack). |
+| OP_TOALTSTACK | 0x6b | Move the top item onto the alt stack. |
+| OP_FROMALTSTACK | 0x6c | Move the top alt-stack item back. |
+| OP_SIZE | 0x82 | Push the byte length of the top item (without removing it). |
+
+**Comparison & arithmetic** — numeric operands are limited to 4 bytes.
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_EQUAL | 0x87 | Push 1 if the top two items are byte-equal, else 0. |
+| OP_EQUALVERIFY | 0x88 | OP_EQUAL then OP_VERIFY. |
+| OP_ADD | 0x93 | Add the top two numbers. |
+| OP_SUB | 0x94 | Subtract the top number from the one below it. |
+| OP_1ADD | 0x8b | Add 1. |
+| OP_1SUB | 0x8c | Subtract 1. |
+| OP_NEGATE | 0x8f | Flip the sign. |
+| OP_ABS | 0x90 | Absolute value. |
+| OP_NOT | 0x91 | Push 1 if the input is 0, else 0. |
+| OP_0NOTEQUAL | 0x92 | Push 1 if the input is non-zero, else 0. |
+| OP_BOOLAND | 0x9a | Push 1 if both inputs are non-zero. |
+| OP_BOOLOR | 0x9b | Push 1 if either input is non-zero. |
+| OP_NUMEQUAL | 0x9c | Push 1 if the two numbers are equal. |
+| OP_NUMEQUALVERIFY | 0x9d | OP_NUMEQUAL then OP_VERIFY. |
+| OP_NUMNOTEQUAL | 0x9e | Push 1 if the two numbers differ. |
+| OP_LESSTHAN | 0x9f | Push 1 if second < top. |
+| OP_GREATERTHAN | 0xa0 | Push 1 if second > top. |
+| OP_LESSTHANOREQUAL | 0xa1 | Push 1 if second ≤ top. |
+| OP_GREATERTHANOREQUAL | 0xa2 | Push 1 if second ≥ top. |
+| OP_MIN | 0xa3 | Smaller of the two numbers. |
+| OP_MAX | 0xa4 | Larger of the two numbers. |
+| OP_WITHIN | 0xa5 | Push 1 if a number is within [min, max). |
+
+**Crypto & hashing**
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_SHA256 | 0xa8 | Replace the top item with its SHA-256 hash. |
+| OP_HASH256 | 0xaa | Replace the top item with its double-SHA-256 hash. |
+| OP_RIPEMD160 | 0xa6 | Replace the top item with its RIPEMD-160 hash. |
+| OP_HASH160 | 0xa9 | RIPEMD-160 of the SHA-256 of the top item. |
+| OP_CHECKSIG | 0xac | Verify an Ed25519 signature against a pubkey over the redeem sighash; push 1/0. |
+| OP_CHECKSIGVERIFY | 0xad | OP_CHECKSIG then OP_VERIFY. |
+| OP_CHECKMULTISIG | 0xae | Verify M valid signatures against N listed public keys. |
+
+**Time locks**
+
+| Opcode | Hex | Meaning |
+|---|---|---|
+| OP_CHECKLOCKTIMEVERIFY | 0xb1 | Abort unless the block height / time has reached the given locktime (values < 500,000,000 are heights, ≥ are unix timestamps). |
+
+**Reserved** — `OP_NOP` (0x61), `OP_NOP1` (0xb0), `OP_NOP3`–`OP_NOP10` (0xb2–0xb9) do nothing today. They are reserved so a future rule can give one meaning as a soft fork (old nodes keep accepting a spend, new nodes enforce the added check). Any opcode *not* in this engine fails closed.
+
+### 11.8 Worked example — hash lock
+
+A hash lock releases coins to anyone who can reveal a secret. The script is `OP_SHA256 <h> OP_EQUAL`, where `h = sha256(preimage)`:
+
+```
+redeemScript: a8 20 <32-byte h> 87
+              │  │  │            └ OP_EQUAL
+              │  │  └ the committed hash h
+              │  └ push 32 bytes
+              └ OP_SHA256
+```
+
+- **Lock:** set `scriptHash = sha256(redeemScript)`, sign and submit a Lock for `amount`.
+- **Redeem:** reveal the same `redeemScript` and set `witness = [preimage]`. The engine pushes `preimage`, runs `OP_SHA256` → `sha256(preimage)`, pushes `h`, and `OP_EQUAL` checks they match.
+
+A real pair from a test chain:
+
+```
+redeemScript: a820d3cc9de122e6316b3760586f64d083c99e87e78d1f1fdcf9357dd4d55388455687
+witness[0]:   1650699ec10b59f6bee7c65b67e382280730c84a1bce297dce96619bda9a71a0   (the preimage)
+```
+
+The in-app **Scripts** tab builds and submits exactly this (guided, plus a raw-hex mode and a full opcode reference), and the explorer disassembles and explains any Lock/Redeem it renders.
+
+## 12. Stability
 
 - This is v0.2. Expect breakage. There is no API versioning header.
 - The CHAIN_ID is the only fork-resistant identifier — any cross-network reuse is rejected at signature-verify time.

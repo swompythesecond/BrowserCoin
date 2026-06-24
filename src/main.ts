@@ -10,6 +10,7 @@ import { mountMiner, openOfflineModal, isOfflineModalOpen } from './ui/miner.js'
 import { maxMinerWorkers } from './miner/controller.js';
 import { mountNetwork } from './ui/network.js';
 import { mountExplorer } from './ui/explorer.js';
+import { mountScripts } from './ui/scripts.js';
 import { mountMempool } from './ui/mempool.js';
 import { mountSettings } from './ui/settings.js';
 import { mountAbout } from './ui/about.js';
@@ -102,6 +103,7 @@ router
   .route('/wallet',   (host, params) => mountWallet(host, node, params))
   .route('/mine',     (host) => mountMiner(host, node))
   .route('/explorer', (host, params) => mountExplorer(host, node, params, router))
+  .route('/scripts',  (host) => mountScripts(host, node))
   .route('/mempool',  (host) => mountMempool(host, node))
   .route('/about',    (host) => mountAbout(host))
   .route('/highlights', (host) => mountHighlights(host))

@@ -9,6 +9,7 @@ import { TICKER } from '../brand.js';
 import { blockTime, timeAgo } from './activityIndex.js';
 import type { ExplorerIndex } from './explorerIndex.js';
 import { addressLink, blockLink, difficultyBits, heightLink, txLink, type SubView } from './explorerShared.js';
+import { kindBadge, flowCells, scriptTxDetail } from './explorerScript.js';
 
 /** Block detail: `?block=` accepts a height or a 64-hex header hash. */
 export function renderBlockView(container: HTMLElement, node: Node, index: ExplorerIndex, query: string): SubView {
@@ -72,15 +73,15 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
         ${cb.block.transactions.length === 0
           ? `<p class="muted text-sm mt-md" style="font-style:italic;">Coinbase only (block reward).</p>`
           : `<div class="table-scroll mt-md"><table class="table">
-              <thead><tr><th>tx</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th><th class="col-hide-sm">nonce</th></tr></thead>
-              <tbody>${cb.block.transactions.map((tx) => `<tr>
+              <thead><tr><th>tx</th><th>type</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th></tr></thead>
+              <tbody>${cb.block.transactions.map((tx) => { const f = flowCells(tx); return `<tr>
                 <td>${txLink(bytesToHex(txHash(tx)))}</td>
-                <td>${addressLink(bytesToHex(tx.from))}</td>
-                <td class="col-hide-sm">${addressLink(bytesToHex(tx.to))}</td>
+                <td>${kindBadge(tx) || '<span class="muted text-sm">transfer</span>'}</td>
+                <td>${f.from}</td>
+                <td class="col-hide-sm">${f.to}</td>
                 <td class="mono">${formatAmount(tx.amount)} ${TICKER}</td>
                 <td class="mono muted col-hide-sm">${formatAmount(tx.fee)} ${TICKER}</td>
-                <td class="mono muted col-hide-sm">${tx.nonce}</td>
-              </tr>`).join('')}</tbody>
+              </tr>`; }).join('')}</tbody>
             </table></div>`}
       </section>
     `;
@@ -99,19 +100,23 @@ export function renderTxView(container: HTMLElement, node: Node, index: Explorer
       const tx = cb?.block.transactions[loc.txIndex];
       if (cb && tx) {
         const confirmations = node.chain.height - loc.height + 1;
+        const scriptBody = scriptTxDetail(tx);
         container.innerHTML = `
           <section class="card">
             <div class="card-header">
               <h3 class="card-title">Transaction</h3>
+              ${kindBadge(tx)}
               <span class="badge badge-confirmed">confirmed</span>
             </div>
-            <dl class="kv">
-              <dt>hash</dt><dd class="hash">${hashHex}</dd>
+            <dl class="kv"><dt>hash</dt><dd class="hash">${hashHex}</dd></dl>
+            ${scriptBody ?? `<dl class="kv">
               <dt>from</dt><dd>${addressLink(bytesToHex(tx.from), bytesToHex(tx.from))}</dd>
               <dt>to</dt><dd>${addressLink(bytesToHex(tx.to), bytesToHex(tx.to))}</dd>
               <dt>amount</dt><dd>${formatAmount(tx.amount)} ${TICKER}</dd>
               <dt>fee</dt><dd>${formatAmount(tx.fee)} ${TICKER}</dd>
               <dt>nonce</dt><dd>${tx.nonce}</dd>
+            </dl>`}
+            <dl class="kv">
               <dt>block</dt><dd>${heightLink(loc.height)} <span class="muted">(${blockLink(loc.blockHash)})</span></dd>
               <dt>confirmations</dt><dd>${confirmations}</dd>
               <dt>time</dt><dd>${new Date(cb.block.header.timestamp * 1000).toLocaleString()} <span class="muted">(${blockTime(cb.block.header.timestamp)})</span></dd>
@@ -125,21 +130,23 @@ export function renderTxView(container: HTMLElement, node: Node, index: Explorer
     const pendingEntry = node.mempool.listEntries().find((e) => bytesToHex(txHash(e.tx)) === hashHex);
     if (pendingEntry) {
       const tx = pendingEntry.tx;
+      const scriptBody = scriptTxDetail(tx);
       container.innerHTML = `
         <section class="card">
           <div class="card-header">
             <h3 class="card-title">Transaction</h3>
+            ${kindBadge(tx)}
             <span class="badge badge-pending">pending</span>
           </div>
-          <dl class="kv">
-            <dt>hash</dt><dd class="hash">${hashHex}</dd>
+          <dl class="kv"><dt>hash</dt><dd class="hash">${hashHex}</dd></dl>
+          ${scriptBody ?? `<dl class="kv">
             <dt>from</dt><dd>${addressLink(bytesToHex(tx.from), bytesToHex(tx.from))}</dd>
             <dt>to</dt><dd>${addressLink(bytesToHex(tx.to), bytesToHex(tx.to))}</dd>
             <dt>amount</dt><dd>${formatAmount(tx.amount)} ${TICKER}</dd>
             <dt>fee</dt><dd>${formatAmount(tx.fee)} ${TICKER}</dd>
             <dt>nonce</dt><dd>${tx.nonce}</dd>
-            <dt>seen</dt><dd>${timeAgo(pendingEntry.receivedAt)}</dd>
-          </dl>
+          </dl>`}
+          <dl class="kv"><dt>seen</dt><dd>${timeAgo(pendingEntry.receivedAt)}</dd></dl>
           <p class="muted text-sm mt-md">Waiting in the mempool to be mined into a block.</p>
         </section>
       `;

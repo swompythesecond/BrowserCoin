@@ -167,7 +167,6 @@ export const GENESIS_TIMESTAMP = GENESIS.header.timestamp;
  * IMPORTANT: do NOT bump POW salt or BROWSERCOIN_NETWORK / CHAIN_VERSION for
  * this fork — those wipe IDB / invalidate PoW and would reset the chain.
  *
- * PLACEHOLDER — set to the announced switch date before release.
- * 1790000000 = 2026-09-21T07:33:20Z.
+ * Announced switch date: 2026-07-05 16:00:00 UTC.
  */
-export const FORK1_ACTIVATION_TIME = 1790000000;
+export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
