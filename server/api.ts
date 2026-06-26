@@ -134,7 +134,13 @@ async function loadChainFromDisk(): Promise<void> {
     let replayed = 0;
     for (const hex of data.blocks) {
       const b = decodeBlock(hexToBytes(hex));
-      const err = await chain.addBlock(b);
+      // Fast path: these blocks were fully validated (incl. PoW) when first
+      // accepted and persisted by us. Re-verifying Argon2id PoW for the whole
+      // chain on every restart costs ~40-125 ms/block — minutes for a long
+      // chain — and buys no security: anyone who can rewrite chain-${PORT}.json
+      // can rewrite this process too. addValidatedBlock still re-runs the cheap
+      // structural + balance/nonce checks, so corruption is still caught.
+      const err = await chain.addValidatedBlock(b);
       if (err === null) replayed++;
       else console.warn('[chain] disk block rejected:', err);
     }
