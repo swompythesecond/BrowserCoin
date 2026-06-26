@@ -4,7 +4,8 @@ import { hashHeader } from '../chain/block.js';
 import { bytesToHex, compactToTarget } from '../util/binary.js';
 import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
-import { cardHeader } from './info.js';
+import { cardHeader, infoButton } from './info.js';
+import { forkCountdown, forkActivationDateUTC } from './forkStatus.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
@@ -41,6 +42,13 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     <div class="view-header">
       <h2 class="view-title">Welcome to BrowserCoin</h2>
       <span class="view-sub">A fully decentralized cryptocurrency you can mine, send and explore — right here in your browser. <a class="view-sub-link" href="/about">Learn more</a></span>
+    </div>
+
+    <div class="card" data-w="forkBanner" hidden style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:16px;border-left:3px solid #7c5cff;">
+      <span style="font-size:18px;line-height:1;">⏳</span>
+      <span data-w="forkBannerText" class="text-sm" style="flex:1;min-width:0;"></span>
+      <span data-slot="forkInfo"></span>
+      <button class="ghost small" data-w="forkClose" aria-label="Dismiss" title="Dismiss" style="line-height:1;">✕</button>
     </div>
 
     <div class="grid grid-12">
@@ -450,6 +458,35 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     }
   }
 
+  // --- Script hard-fork countdown banner (dismissible, persists) ---
+  const FORK_BANNER_KEY = 'browsercoin:fork-banner-dismissed';
+  let forkTimer: ReturnType<typeof setInterval> | undefined;
+  const forkBanner = view.querySelector<HTMLElement>('[data-w="forkBanner"]');
+  const forkBannerText = view.querySelector<HTMLElement>('[data-w="forkBannerText"]');
+  const alreadyDismissed = (() => {
+    try { return localStorage.getItem(FORK_BANNER_KEY) === '1'; } catch { return false; }
+  })();
+  if (forkBanner && forkBannerText && !alreadyDismissed) {
+    view.querySelector('[data-slot="forkInfo"]')?.appendChild(infoButton({
+      title: 'The script upgrade',
+      body: `BrowserCoin is adding scripts — programmable spend conditions like hash-locked payments, the building block for atomic swaps and escrow.\n\nIt's a coordinated rule change on the SAME chain: your balance, history and mining are untouched. At the switch time the network flips automatically, driven by the chain's own clock (median-time-past), so every up-to-date tab activates at the same block.\n\nAll you need to do is keep this tab refreshed before the date — non-updated tabs will fork off when scripts go live.`,
+    }));
+    const updateForkBanner = (): void => {
+      const cd = forkCountdown();
+      forkBannerText.innerHTML = cd.activated
+        ? `<b>Scripts are LIVE</b> on the network.`
+        : `<b>Script hard-fork incoming.</b> ${cd.line} <span class="muted">(${forkActivationDateUTC()})</span>. Keep this tab refreshed so you flip with the network.`;
+    };
+    updateForkBanner();
+    forkBanner.hidden = false;
+    forkTimer = setInterval(updateForkBanner, 1000);
+    view.querySelector('[data-w="forkClose"]')?.addEventListener('click', () => {
+      forkBanner.hidden = true;
+      if (forkTimer) { clearInterval(forkTimer); forkTimer = undefined; }
+      try { localStorage.setItem(FORK_BANNER_KEY, '1'); } catch { /* storage unavailable */ }
+    });
+  }
+
   refresh();
   refreshMiner();
 
@@ -480,6 +517,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     unsubPeer?.();
     unsubSync();
     clearInterval(ticker);
+    if (forkTimer) clearInterval(forkTimer);
   };
 }
 
