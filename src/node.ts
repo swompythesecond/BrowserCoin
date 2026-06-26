@@ -698,6 +698,9 @@ export class Node {
    * the new lock's id (hex) on success, or an error string.
    */
   lock(amountWww: string, feeWww: string, redeemScript: Uint8Array): { lockId: string } | string {
+    if (!this.chain.nextBlockScriptContext().scriptsActive) {
+      return 'scripts are not active yet — they activate at the fork date';
+    }
     let amount: bigint;
     let fee: bigint;
     try {
@@ -722,6 +725,7 @@ export class Node {
    * `toAddress`. The lock must already be confirmed on-chain.
    */
   redeem(lockIdHex: string, toAddress: Uint8Array, feeWww: string, redeemScript: Uint8Array, witness: Uint8Array[]): string | null {
+    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet — they activate at the fork date';
     const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
     if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
     if (compareBytes(scriptHash(redeemScript), lock.scriptHash) !== 0) return 'this script does not match the lock';
@@ -758,6 +762,7 @@ export class Node {
    * been created for our key, or the script hash won't match.
    */
   redeemHashlock(lockIdHex: string, preimage: Uint8Array, toAddress: Uint8Array, feeWww: string): string | null {
+    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet — they activate at the fork date';
     const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
     if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
     const redeemScript = hashlockSigScript(sha256(preimage), this.wallet.publicKey);

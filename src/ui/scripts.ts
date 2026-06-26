@@ -6,6 +6,7 @@ import { bytesToHex, hexToBytes } from '../util/binary.js';
 import { cardHeader } from './info.js';
 import { scriptPanel } from './explorerScript.js';
 import { OPCODE_REFERENCE } from '../chain/opcodeRef.js';
+import { forkCountdown, forkActivationDateUTC } from './forkStatus.js';
 
 /**
  * The Scripts tab: a guided builder for hash-locked coins — create a lock that
@@ -20,6 +21,10 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     <div class="view-header">
       <h2 class="view-title">Scripts</h2>
       <span class="view-sub">Lock coins behind a condition instead of a single key — then unlock them by satisfying it.</span>
+    </div>
+
+    <div class="card" data-w="gate" hidden style="border-left:3px solid #d99a1c;padding:12px 16px;margin-bottom:16px;">
+      <span data-w="gate-text" class="text-sm"></span>
     </div>
 
     <section class="card" data-mount="intro">
@@ -303,5 +308,27 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
       </table></div>
     </div>`).join('');
 
-  return () => { /* no timers/subscriptions to clean up */ };
+  // --- Activation gate: scripts can't be created until the fork is live. ---
+  // Keep the builder/preview/reference usable for learning, but disable the
+  // actions so nobody locks coins into a tx that can't confirm until the date
+  // (which would also wedge their nonce). Re-checks on every chain update so it
+  // flips on its own the moment the network activates.
+  const gate = $('gate');
+  const gateText = $('gate-text');
+  const submitBtns = ['c-go', 'r-go', 'raw-lock-go', 'raw-redeem-go'].map((w) => $<HTMLButtonElement>(w));
+  function applyGate(): void {
+    const live = node.chain.nextBlockScriptContext().scriptsActive;
+    gate.hidden = live;
+    for (const b of submitBtns) b.disabled = !live;
+    if (!live) {
+      const cd = forkCountdown();
+      gateText.innerHTML = cd.activated
+        ? `⏳ <b>Activating now</b> — waiting for the chain's clock (median-time-past) to cross the threshold, a few minutes after ${forkActivationDateUTC()}. Locking and redeeming unlock automatically.`
+        : `⏳ <b>Not live yet.</b> ${cd.line} <span class="muted">(${forkActivationDateUTC()})</span>. You can build and preview scripts below to learn how they work — locking and redeeming unlock once the fork activates.`;
+    }
+  }
+  applyGate();
+  const unsubGate = node.onChain(applyGate);
+
+  return () => { unsubGate(); };
 }
