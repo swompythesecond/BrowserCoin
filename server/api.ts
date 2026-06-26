@@ -378,6 +378,8 @@ interface PeerState {
    * whether the peer counts as "actively mining right now."
    */
   lastMiningAt: number | null;
+  /** Whether the node's last heartbeat reported a fork-ready (script) build. */
+  forkReady: boolean;
 }
 const peers = new Map<string, PeerState>();
 
@@ -386,6 +388,12 @@ function activeMinerCount(now: number): number {
   for (const p of peers.values()) {
     if (p.lastMiningAt !== null && now - p.lastMiningAt < MINING_TTL_MS) n++;
   }
+  return n;
+}
+
+function forkReadyCount(): number {
+  let n = 0;
+  for (const p of peers.values()) if (p.forkReady) n++;
   return n;
 }
 
@@ -424,6 +432,7 @@ app.get('/stats', cheapLimiter, (_req, res) => {
   res.json({
     peerCount: peers.size,
     minersActive: activeMinerCount(now),
+    forkReadyCount: forkReadyCount(),
     serverHeight: chain.height,
     serverTip: bytesToHex(chain.tip.hash),
     latestHeight: Math.max(chain.height, heights[0] ?? 0),
@@ -442,7 +451,7 @@ app.get('/helpers', cheapLimiter, (_req, res) => {
 });
 
 app.post('/heartbeat', cheapLimiter, (req, res) => {
-  const { id, height, mining } = req.body as { id?: string; height?: number; mining?: boolean };
+  const { id, height, mining, forkReady } = req.body as { id?: string; height?: number; mining?: boolean; forkReady?: boolean };
   if (typeof id !== 'string' || typeof height !== 'number') {
     res.status(400).json({ error: 'bad heartbeat' });
     return;
@@ -452,6 +461,7 @@ app.post('/heartbeat', cheapLimiter, (req, res) => {
   if (existing) {
     existing.lastSeen = now;
     existing.reportedHeight = height;
+    existing.forkReady = forkReady === true;
     if (mining === true) existing.lastMiningAt = now;
   } else {
     peers.set(id, {
@@ -459,6 +469,7 @@ app.post('/heartbeat', cheapLimiter, (req, res) => {
       lastSeen: now,
       reportedHeight: height,
       lastMiningAt: mining === true ? now : null,
+      forkReady: forkReady === true,
     });
   }
   res.json({ ok: true });

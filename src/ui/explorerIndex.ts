@@ -281,7 +281,7 @@ export class ExplorerIndex {
   richList(state: State): RichRow[] {
     if (this.cachedRichVersion === this.version) return this.cachedRich;
     const rows: RichRow[] = [];
-    for (const [address, acct] of state) {
+    for (const [address, acct] of state.accounts) {
       rows.push({ address, balance: acct.balance, nonce: acct.nonce });
     }
     rows.sort((a, b) => (a.balance === b.balance ? 0 : a.balance > b.balance ? -1 : 1));

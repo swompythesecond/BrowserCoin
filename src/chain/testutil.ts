@@ -40,8 +40,9 @@ export async function buildBlock(
     timestamp,
   );
 
+  const scriptCtx = chain.nextBlockScriptContext();
   const sim = cloneState(chain.tipState);
-  const err = applyBlockTxs(sim, height, miner, txs);
+  const err = applyBlockTxs(sim, height, miner, txs, scriptCtx);
   if (err) throw new Error('test buildBlock apply failed: ' + err);
 
   const baseHeader: BlockHeader = {

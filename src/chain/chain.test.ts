@@ -12,7 +12,7 @@ describe('blockchain', () => {
   it('starts at genesis with height 0', () => {
     const chain = new Blockchain();
     expect(chain.height).toBe(0);
-    expect(chain.tipState.size).toBe(0);
+    expect(chain.tipState.accounts.size).toBe(0);
   });
 
   it('accepts an empty mined block and credits the miner', async () => {

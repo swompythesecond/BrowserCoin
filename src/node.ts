@@ -1,6 +1,10 @@
 import { Blockchain } from './chain/blockchain.js';
 import { Mempool } from './chain/mempool.js';
-import { signTx, type Transaction } from './chain/transaction.js';
+import { signTx, signLock, lockIdOf, redeemSighash, TxKind, type Transaction } from './chain/transaction.js';
+import { scriptHash } from './chain/script.js';
+import { hashlockSigScript } from './chain/scriptBuild.js';
+import { sign as signMessage } from './crypto/keys.js';
+import { sha256 } from './crypto/hash.js';
 import { type KeyPair } from './crypto/keys.js';
 import { MinerController } from './miner/controller.js';
 import { PeerNetwork } from './net/peer.js';
@@ -11,13 +15,16 @@ import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
 import {
   deserializeState,
   getAccount,
+  getLock,
   serializeState,
+  serializeLocks,
   stateRoot,
   type StateRow,
+  type LockRow,
 } from './chain/state.js';
 import { blockReward, COIN, SNAPSHOT_DEPTH } from './chain/genesis.js';
 import { decodeBlock, encodeBlock, hashHeader, type Block } from './chain/block.js';
-import { bytesToHex, compareBytes } from './util/binary.js';
+import { bytesToHex, hexToBytes, compareBytes } from './util/binary.js';
 import { ActivityIndex } from './ui/activityIndex.js';
 import {
   clearAll,
@@ -45,6 +52,7 @@ interface StateSnapshot {
   finalizedHeight: number;
   finalizedHashHex: string;
   accounts: StateRow[]; // state AFTER the finalized block
+  locks?: LockRow[];    // script locks live at the finalized block (omitted pre-fork / old snapshots)
 }
 
 /**
@@ -321,7 +329,7 @@ export class Node {
    * back to a clean full replay.
    */
   private async replayWithSnapshot(stored: StoredBlock[], snap: StateSnapshot): Promise<void> {
-    const anchorState = deserializeState(snap.accounts);
+    const anchorState = deserializeState(snap.accounts, snap.locks ?? []);
     const finalizedHeight = snap.finalizedHeight;
     let anchorSeeded = false;
 
@@ -389,6 +397,7 @@ export class Node {
         finalizedHeight: at.height,
         finalizedHashHex: at.hashHex,
         accounts: serializeState(at.state),
+        locks: serializeLocks(at.state),
       };
       await putMeta('stateSnapshot', snap);
       this.lastSnapshotHeight = finalizedHeight;
@@ -670,6 +679,114 @@ export class Node {
     this.miner.refresh();
     this.emitChain();
     return null;
+  }
+
+  /** Shared broadcast tail for a built script tx. */
+  private submit(tx: Transaction): string | null {
+    const err = this.mempool.add(tx, this.chain.tipState);
+    if (err) return err;
+    this.network?.broadcastTx(tx);
+    this.serverSync?.pushTx(tx);
+    this.miner.refresh();
+    this.emitChain();
+    return null;
+  }
+
+  /**
+   * Lock coins from the user's wallet under `redeemScript`. Only the script's
+   * hash is published now; the script itself is revealed when redeemed. Returns
+   * the new lock's id (hex) on success, or an error string.
+   */
+  lock(amountWww: string, feeWww: string, redeemScript: Uint8Array): { lockId: string } | string {
+    let amount: bigint;
+    let fee: bigint;
+    try {
+      amount = parseAmount(amountWww);
+      fee = parseAmount(feeWww);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    const nonce = this.myNonce();
+    const tx = signLock(
+      { from: this.wallet.publicKey, to: new Uint8Array(32), amount, fee, nonce, scriptHash: scriptHash(redeemScript) },
+      this.wallet.privateKey,
+    );
+    const err = this.submit(tx);
+    if (err) return err;
+    return { lockId: bytesToHex(lockIdOf(tx)) };
+  }
+
+  /**
+   * Redeem an existing lock by revealing its `redeemScript` and supplying a
+   * `witness` that satisfies it, paying the locked amount (minus `feeWww`) to
+   * `toAddress`. The lock must already be confirmed on-chain.
+   */
+  redeem(lockIdHex: string, toAddress: Uint8Array, feeWww: string, redeemScript: Uint8Array, witness: Uint8Array[]): string | null {
+    const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
+    if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
+    if (compareBytes(scriptHash(redeemScript), lock.scriptHash) !== 0) return 'this script does not match the lock';
+    let fee: bigint;
+    try {
+      fee = parseAmount(feeWww);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    if (fee > lock.amount) return 'fee exceeds the locked amount';
+    const tx: Transaction = {
+      kind: TxKind.Redeem,
+      from: new Uint8Array(32),
+      to: toAddress,
+      amount: lock.amount, // a redeem must claim exactly the locked amount
+      fee,
+      nonce: 0,
+      signature: new Uint8Array(0),
+      lockId: hexToBytes(lockIdHex.toLowerCase()),
+      redeemScript,
+      witness,
+    };
+    // redeemSighash is what a signature-based witness would sign over; surfaced
+    // here so a future signed-template builder can reuse this path unchanged.
+    void redeemSighash(tx);
+    return this.submit(tx);
+  }
+
+  /**
+   * Redeem a hash-locked PAYMENT (`OP_SHA256 <h> OP_EQUALVERIFY <pubkey>
+   * OP_CHECKSIG`) addressed to this wallet's key. Reconstructs the script from
+   * the secret `preimage` + our own pubkey, signs the spend (binding `to`,
+   * amount and fee so it can't be front-run), and submits. The lock must have
+   * been created for our key, or the script hash won't match.
+   */
+  redeemHashlock(lockIdHex: string, preimage: Uint8Array, toAddress: Uint8Array, feeWww: string): string | null {
+    const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
+    if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
+    const redeemScript = hashlockSigScript(sha256(preimage), this.wallet.publicKey);
+    if (compareBytes(scriptHash(redeemScript), lock.scriptHash) !== 0) {
+      return 'this lock is not payable to your key with that secret';
+    }
+    let fee: bigint;
+    try {
+      fee = parseAmount(feeWww);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    if (fee > lock.amount) return 'fee exceeds the locked amount';
+    const tx: Transaction = {
+      kind: TxKind.Redeem,
+      from: new Uint8Array(32),
+      to: toAddress,
+      amount: lock.amount,
+      fee,
+      nonce: 0,
+      signature: new Uint8Array(0),
+      lockId: hexToBytes(lockIdHex.toLowerCase()),
+      redeemScript,
+      witness: [],
+    };
+    // Sign the sighash (which commits to `to`/amount/fee), then witness = [sig, preimage].
+    const sig = signMessage(redeemSighash(tx), this.wallet.privateKey);
+    tx.witness = [sig, preimage];
+    return this.submit(tx);
   }
 
   onChain(fn: ChainListener): () => void {

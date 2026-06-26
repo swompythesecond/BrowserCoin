@@ -10,6 +10,7 @@ import { renderPager } from './pager.js';
 import type { Router } from './router.js';
 import { getExplorerIndex, type ExplorerIndex } from './explorerIndex.js';
 import { addressLink, blockLink, difficultyBits, heightLink, txLink, type SubView } from './explorerShared.js';
+import { kindBadge, flowCells } from './explorerScript.js';
 import { renderAddressView } from './explorerAddress.js';
 import { renderBlockView, renderTxView } from './explorerBlock.js';
 import { renderRichView } from './explorerRich.js';
@@ -210,15 +211,15 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
       return `<div class="muted text-sm" style="font-style:italic;">Coinbase only (block reward).</div>`;
     }
     return `<div class="table-scroll"><table class="table">
-      <thead><tr><th>tx</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th><th class="col-hide-sm">nonce</th></tr></thead>
-      <tbody>${b.txs.map((tx) => `<tr>
+      <thead><tr><th>tx</th><th>type</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th></tr></thead>
+      <tbody>${b.txs.map((tx) => { const f = flowCells(tx); return `<tr>
         <td>${txLink(bytesToHex(txHash(tx)), bytesToHex(txHash(tx)).slice(0, 10) + '…')}</td>
-        <td>${addressLink(bytesToHex(tx.from))}</td>
-        <td class="col-hide-sm">${addressLink(bytesToHex(tx.to))}</td>
+        <td>${kindBadge(tx) || '<span class="muted text-sm">transfer</span>'}</td>
+        <td>${f.from}</td>
+        <td class="col-hide-sm">${f.to}</td>
         <td class="mono">${formatAmount(tx.amount)} ${TICKER}</td>
         <td class="mono muted col-hide-sm">${formatAmount(tx.fee)} ${TICKER}</td>
-        <td class="mono muted col-hide-sm">${tx.nonce}</td>
-      </tr>`).join('')}</tbody>
+      </tr>`; }).join('')}</tbody>
     </table></div>`;
   }
 

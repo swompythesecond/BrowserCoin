@@ -28,6 +28,7 @@ import {
   type State,
 } from './state.js';
 import { validateTxStructure, type Transaction } from './transaction.js';
+import { scriptsActiveForMtp } from './fork.js';
 
 export interface ChainBlock {
   block: Block;
@@ -207,6 +208,17 @@ export class Blockchain {
     return this.addBlockInternal(block, { skipPoW: true, skipTxSig: true, skipStateRoot: true });
   }
 
+  /**
+   * Script-fork context a child of `parentHashHex` (default: the current tip)
+   * would be mined under: its median-time-past and whether script (Lock/Redeem)
+   * transactions are active at that point. Used by the miner template and tests
+   * so the candidate's stateRoot matches what validation will recompute.
+   */
+  nextBlockScriptContext(parentHashHex: string = this.tipHash): { scriptsActive: boolean; blockMtp: number } {
+    const mtp = medianTimePast(this.getRecentHeaders(MTP_WINDOW, parentHashHex));
+    return { scriptsActive: scriptsActiveForMtp(mtp), blockMtp: mtp };
+  }
+
   private async addBlockInternal(
     block: Block,
     opts: { skipPoW: boolean; skipTxSig: boolean; skipStateRoot?: boolean },
@@ -262,7 +274,10 @@ export class Blockchain {
         if (sErr) return `tx structure: ${sErr}`;
       }
     }
-    const applyErr = applyBlockTxs(newState, header.height, header.miner, transactions);
+    const applyErr = applyBlockTxs(newState, header.height, header.miner, transactions, {
+      scriptsActive: scriptsActiveForMtp(mtp),
+      blockMtp: mtp,
+    });
     if (applyErr) return `apply: ${applyErr}`;
     if (!opts.skipStateRoot) {
       const finalRoot = stateRoot(newState);

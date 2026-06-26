@@ -154,3 +154,19 @@ export const GENESIS: Block = {
 
 /** Convenience: genesis timestamp exposed for ASERT (anchor time). */
 export const GENESIS_TIMESTAMP = GENESIS.header.timestamp;
+
+/**
+ * Script hard-fork (fork #1) activation time, in unix seconds.
+ *
+ * This is a TIME-GATED rule extension on the SAME chain — it does NOT reset
+ * balances or history. Lock/Redeem (script) transactions become valid once a
+ * block's median-time-past (BIP113-style, computed from the chain itself, not a
+ * wall clock) reaches this value. Before then they are rejected, so upgraded and
+ * non-upgraded nodes agree pre-fork; at the date the network flips together.
+ *
+ * IMPORTANT: do NOT bump POW salt or BROWSERCOIN_NETWORK / CHAIN_VERSION for
+ * this fork — those wipe IDB / invalidate PoW and would reset the chain.
+ *
+ * Announced switch date: 2026-07-05 16:00:00 UTC.
+ */
+export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
