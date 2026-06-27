@@ -20,6 +20,13 @@ const HIGHLIGHTS: Highlight[] = [
     url: 'https://brcpool.cryptec.tech/',
   },
   {
+    title: 'Fulgur Pool',
+    tag: 'Mining pool',
+    description:
+      'Another community-run mining pool — combine hashrate with other miners for steadier, shared payouts.',
+    url: 'https://fulgurpool.xyz/',
+  },
+  {
     title: 'BrowserCoin Rush',
     tag: 'Faucet game',
     description:
