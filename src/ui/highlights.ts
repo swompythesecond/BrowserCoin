@@ -13,11 +13,11 @@ interface Highlight {
 
 const HIGHLIGHTS: Highlight[] = [
   {
-    title: 'BRC Pool',
+    title: 'Cryptec Pool',
     tag: 'Mining pool',
     description:
       'Pool your hashrate with other miners and share the block rewards, so payouts come in steadily instead of all-or-nothing.',
-    url: 'https://brcpool.org/',
+    url: 'https://brcpool.cryptec.tech/',
   },
   {
     title: 'BrowserCoin Rush',
