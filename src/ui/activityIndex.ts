@@ -6,11 +6,13 @@ import { bytesToHex } from '../util/binary.js';
 export interface ActivityRow {
   status: 'pending' | 'confirmed' | 'mined';
   dir: 'sent' | 'received' | 'mined';
-  counterparty: string; // short hex, or 'block #N' for mined rows
-  amount: bigint;       // positive = inflow, negative = outflow (incl. fee)
+  counterparty: string;      // short hex, or 'block #N' for mined rows
+  counterpartyHex?: string;  // full hex address (sent/received) — for the explorer link
+  height?: number;           // block height (mined rows) — for the explorer link
+  amount: bigint;            // positive = inflow, negative = outflow (incl. fee)
   fee: bigint;
   when: string;
-  sortKey: number;      // higher = newer
+  sortKey: number;           // higher = newer
 }
 
 /**
@@ -31,6 +33,7 @@ export function extractBlockRows(block: Block, myAddr: string): ActivityRow[] {
       status: 'mined',
       dir: 'mined',
       counterparty: `block #${h.height}`,
+      height: h.height,
       amount: blockReward(h.height) + totalFees,
       fee: 0n,
       when: blockTime(h.timestamp),
@@ -47,6 +50,7 @@ export function extractBlockRows(block: Block, myAddr: string): ActivityRow[] {
       status: 'confirmed',
       dir: sent ? 'sent' : 'received',
       counterparty: short(sent ? toHex : fromHex),
+      counterpartyHex: sent ? toHex : fromHex,
       amount: sent ? -(tx.amount + tx.fee) : tx.amount,
       fee: sent ? tx.fee : 0n,
       when: blockTime(h.timestamp),

@@ -3,6 +3,7 @@ import { formatAmount } from '../node.js';
 import { bytesToHex } from '../util/binary.js';
 import { TICKER } from '../brand.js';
 import { short, timeAgo, type ActivityRow } from './activityIndex.js';
+import { addressLink, heightLink } from './explorerShared.js';
 
 export { short, timeAgo, blockTime, type ActivityRow } from './activityIndex.js';
 
@@ -27,6 +28,7 @@ export function computeActivity(node: Node): ActivityRow[] {
       status: 'pending',
       dir: sent ? 'sent' : 'received',
       counterparty: short(sent ? toHex : fromHex),
+      counterpartyHex: sent ? toHex : fromHex,
       amount: sent ? -(e.tx.amount + e.tx.fee) : e.tx.amount,
       fee: sent ? e.tx.fee : 0n,
       when: timeAgo(e.receivedAt),
@@ -57,10 +59,15 @@ export function renderActivityRows(rows: ActivityRow[]): string {
       const cls = r.amount >= 0n ? 'green' : 'red';
       const arrow = r.dir === 'sent' ? '→' : r.dir === 'received' ? '←' : '⛏';
       const abs = r.amount < 0n ? -r.amount : r.amount;
+      const cpty = r.counterpartyHex
+        ? addressLink(r.counterpartyHex)
+        : r.height !== undefined
+          ? heightLink(r.height)
+          : r.counterparty;
       return `<tr>
         <td><span class="badge badge-${r.status}">${r.status}</span></td>
         <td class="mono col-hide-sm">${arrow} ${r.dir}</td>
-        <td class="addr">${r.counterparty}</td>
+        <td class="addr">${cpty}</td>
         <td class="mono ${cls}">${sign}${formatAmount(abs)} ${TICKER}</td>
         <td class="muted col-hide-sm" title="${new Date(r.sortKey).toLocaleString()}">${r.when}</td>
       </tr>`;
