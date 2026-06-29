@@ -6,6 +6,7 @@ import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
 import { cardHeader, infoButton } from './info.js';
 import { forkCountdown, forkActivationDateUTC } from './forkStatus.js';
+import { addressLink, blockLink, heightLink } from './explorerShared.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
@@ -379,13 +380,12 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     for (const cb of node.chain.iterateCanonical()) {
       if (n++ >= PREVIEW_ROWS) break;
       const h = cb.block.header;
-      const hashHex = bytesToHex(hashHeader(h)).slice(0, 10) + '…';
-      const minerHex = bytesToHex(h.miner).slice(0, 10) + '…';
+      const hashHex = bytesToHex(hashHeader(h));
       blocks.push(`<tr>
-        <td class="mono">${h.height}</td>
-        <td class="hash">${hashHex}</td>
+        <td class="mono">${heightLink(h.height)}</td>
+        <td class="hash">${blockLink(hashHex, hashHex.slice(0, 10) + '…')}</td>
         <td class="mono">${cb.block.transactions.length}</td>
-        <td class="addr col-hide-sm">${minerHex}</td>
+        <td class="addr col-hide-sm">${addressLink(bytesToHex(h.miner))}</td>
         <td class="muted">${blockTime(h.timestamp)}</td>
       </tr>`);
     }
@@ -406,8 +406,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
         const toHex = bytesToHex(e.tx.to);
         const mine = fromHex === myAddr || toHex === myAddr;
         return `<tr class="${mine ? 'row-mine' : ''}">
-          <td class="addr">${fromHex.slice(0, 8)}…${fromHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
-          <td class="addr col-hide-sm">${toHex.slice(0, 8)}…${toHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
+          <td class="addr">${addressLink(fromHex)}${fromHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
+          <td class="addr col-hide-sm">${addressLink(toHex)}${toHex === myAddr ? ' <span class="badge badge-you">you</span>' : ''}</td>
           <td class="mono">${formatAmount(e.tx.amount)} ${TICKER}</td>
           <td class="muted col-hide-sm">${timeAgo(e.receivedAt)}</td>
         </tr>`;
