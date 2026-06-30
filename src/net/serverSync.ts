@@ -32,12 +32,15 @@ const MAX_HELPER_BYTES = 256 * 1024;
 const ISOLATED_POLL_MS = 10_000;
 /**
  * Always-on background poll, even when peered. This is the bridge that lets a
- * NAT-stuck "server-only" miner's blocks reach the rest of the mesh — peered
- * clients pick them up within this window instead of "whenever someone happens
- * to mine next." ~½× block time; tiny server load (one /tip per minute, no
- * batch fetch unless heights actually differ).
+ * NAT-stuck "server-only" miner's blocks reach the rest of the mesh. The first
+ * peered client to poll picks the block up and re-gossips it over WebRTC (see
+ * Node's serverSync onUpdate -> gossipTipIfNew), so the whole mesh learns it in
+ * ms — effective bridge delay is ~this interval / number-of-polling-peers and
+ * shrinks as the network grows. Kept low (~⅕ block time) so even a small mesh
+ * reacts fast; still cheap (one /tip per tick, no batch fetch unless heights
+ * actually differ).
  */
-const BRIDGE_POLL_MS = 90_000;
+const BRIDGE_POLL_MS = 30_000;
 
 export interface ServerSyncStatus {
   /**

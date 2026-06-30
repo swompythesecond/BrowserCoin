@@ -146,6 +146,16 @@ export class Node {
   /** Debounce handle + last-written height for the persisted state snapshot. */
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSnapshotHeight = -1;
+  /**
+   * Tip hash hex we've most recently gossiped to WebRTC peers. Lets us re-gossip
+   * a server-sourced block exactly once: an off-mesh ("server-only") miner's
+   * block reaches us only via the bridge poll, so flooding it to peers makes the
+   * whole mesh learn it in ms instead of each peer waiting out its own poll —
+   * effective bridge delay becomes ~poll_interval / number-of-polling-peers and
+   * shrinks as the network grows. Deduped so repeat syncs (mempool-only,
+   * bootstrap multi-block, or a tip we already gossiped) don't re-broadcast.
+   */
+  private lastGossipedTipHex = '';
   private syncStatus: SyncStatus = {
     syncing: true,
     targetHeight: 0,
@@ -212,7 +222,7 @@ export class Node {
         }
         // Mempool eviction + miner re-template happen in the onTipChanged
         // handler that addBlock just fired. We only need to propagate + notify.
-        this.network?.broadcastBlock();
+        this.gossipTipIfNew();
         this.serverSync?.kick();
         this.emitChain();
         this.emitBlockMined(block);
@@ -430,6 +440,11 @@ export class Node {
         this.miner.refresh();
         this.emitChain();
         this.updateSyncReadiness();
+        // Re-gossip a server-sourced tip to our WebRTC peers. Off-mesh miners'
+        // blocks only reach us via the bridge poll; flooding them over P2P lets
+        // the whole mesh catch up in ms instead of each peer waiting its own
+        // poll. Deduped by tip hash, so a mempool-only sync doesn't broadcast.
+        this.gossipTipIfNew();
       },
       () => this.miner.getStatus().running,
       () => this.refreshServerListsFromDiscovery(),
@@ -548,6 +563,10 @@ export class Node {
         // a lot of people" path we want to avoid.
         this.miner.refresh();
         this.emitChain();
+        // peer.ts already re-gossips an accepted P2P block to our other peers,
+        // so mark this tip as gossiped — a later server-sync mempool tick must
+        // not redundantly re-broadcast a block the mesh already has.
+        this.lastGossipedTipHex = bytesToHex(this.chain.tip.hash);
       },
       () => this.miner.getStatus().running,
     );
@@ -812,6 +831,20 @@ export class Node {
 
   private emitChain(): void {
     for (const fn of this.chainListeners) fn();
+  }
+
+  /**
+   * Re-broadcast the current tip to WebRTC peers unless we've already gossiped
+   * it. Called after a local mine and after a server-sourced pull so off-mesh
+   * blocks propagate across the mesh in ms; the tip-hash dedup keeps a
+   * mempool-only sync, a bootstrap multi-block catch-up, or a tip peers already
+   * have from re-sending. No-op when P2P isn't up yet (`network` undefined).
+   */
+  private gossipTipIfNew(): void {
+    const tipHex = bytesToHex(this.chain.tip.hash);
+    if (tipHex === this.lastGossipedTipHex) return;
+    this.lastGossipedTipHex = tipHex;
+    this.network?.broadcastBlock();
   }
 
   private emitWallet(): void {
