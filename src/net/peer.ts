@@ -60,6 +60,13 @@ const DIAL_TIMEOUT_MS = 8_000;
 // peer that misses two consecutive ping rounds is reaped.
 const PEER_STALE_MS = 75_000;
 
+// PeerJS mounts discovery at `${path}/${key}/peers`. Our Peers use the default
+// key ('peerjs') and path '/peerjs' (see spawnPeer), and the server ignores the
+// key segment — so this is the authoritative "registered right now" (dialable)
+// peer list, as opposed to the API helpers' /peers HTTP-heartbeat registry.
+const SIGNALING_DISCOVERY_PATH = '/peerjs/peerjs/peers';
+const SIGNALING_DISCOVERY_TIMEOUT_MS = 5_000;
+
 /**
  * Public STUN servers used to discover our reflexive (NAT-mapped) address.
  * Without these, browsers behind almost any NAT can't establish direct WebRTC
@@ -331,13 +338,17 @@ export class PeerNetwork {
     await firstSuccess(opens, 'all signaling servers unreachable');
 
     // After at least one signaling Peer is live, kick off the first peer-
-    // discovery dial pass and the periodic background tasks.
+    // discovery dial pass and the periodic background tasks. Signaling
+    // discovery goes first — it's the authoritative dialable set — then the
+    // gossip cache + helper /peers union as a fallback/supplement.
+    await this.dialFromSignaling();
     await this.dialFromBootstrap();
 
     this.heartbeatTimer = setInterval(() => {
       void this.heartbeat();
       this.pingAndReapStalePeers();
       if (this.connections.size < MIN_PEERS) {
+        void this.dialFromSignaling();
         void this.dialFromBootstrap();
       }
     }, HEARTBEAT_MS);
@@ -568,6 +579,52 @@ export class PeerNetwork {
       this.beginDial(id);
       const conn = origin.connect(id, { reliable: true });
       this.adoptConnection(conn);
+    }
+  }
+
+  /**
+   * Dial candidates pulled from the signaling servers' own discovery lists —
+   * the authoritative set of who's actually registered (dialable) right now.
+   * Complements dialFromBootstrap(), whose gossip cache + helper /peers union
+   * can drift far from signaling registration: a tab whose signaling
+   * connection dropped but keeps HTTP-heartbeating lingers on /peers yet can't
+   * be reached, so a node dialing only /peers wastes ~all its dials on
+   * peer-unavailable ids while the live signaling set sits unused.
+   *
+   * Each discovered id is dialed via the SAME signaling server that reported
+   * it: an id registered on server B isn't reachable through server A, so a
+   * cross-server dial would just burn a slot (and can suppress the id from
+   * later retries via the peer-unavailable handler).
+   */
+  private async dialFromSignaling(): Promise<void> {
+    const dialCap = (): number => Math.min(MAX_PEERS, this.maxConnections);
+    // Snapshot the server URLs up front; the fetch awaits below can interleave.
+    for (const url of [...this.peers.keys()]) {
+      if (this.connections.size + this.dialing.size >= dialCap()) break;
+      if (!this.opened.has(url)) continue;
+
+      const ids = await fetchSignalingPeers(url);
+      // The Peer may have dropped during the fetch — re-check before dialing,
+      // and re-resolve it (setSignalingServers could have rebuilt the map).
+      const peer = this.peers.get(url);
+      if (!peer || !this.opened.has(url) || ids.length === 0) continue;
+
+      // Shuffle so every tab doesn't dial the same prefix of the list.
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+      }
+
+      for (const id of ids) {
+        if (this.connections.size + this.dialing.size >= dialCap()) break;
+        if (id === this.myId) continue;
+        if (this.connections.has(id)) continue;
+        if (this.dialedThisSession.has(id)) continue;
+        this.dialedThisSession.add(id);
+        this.beginDial(id);
+        const conn = peer.connect(id, { reliable: true });
+        this.adoptConnection(conn);
+      }
     }
   }
 
@@ -989,5 +1046,44 @@ async function firstSuccess<T>(promises: Promise<T>[], allFailedMsg: string): Pr
     return await Promise.any(promises);
   } catch {
     throw new Error(allFailedMsg);
+  }
+}
+
+/**
+ * Fetch the peer-ids a signaling server currently has registered, via a plain
+ * HTTP GET of its `allow_discovery` endpoint. This is the authoritative set of
+ * who is actually dialable — as opposed to the API helpers' /peers list, which
+ * is a separate HTTP-heartbeat registry that can drift far from signaling.
+ *
+ * Infallible by contract: any bad-URL / network / HTTP / parse / timeout error
+ * resolves to `[]`. The caller treats an empty list as "nothing new here."
+ *
+ * Deliberately NOT PeerJS's `peer.listAllPeers()`: in peerjs 1.5.x a failed
+ * discovery fetch routes into `_abort(ServerError)`, which can tear down the
+ * otherwise-healthy signaling connection — so a transient blip would drop the
+ * Peer. A standalone fetch with our own timeout/error handling cannot.
+ */
+export async function fetchSignalingPeers(
+  signalingBase: string,
+  timeoutMs = SIGNALING_DISCOVERY_TIMEOUT_MS,
+): Promise<string[]> {
+  let url: string;
+  try {
+    url = new URL(SIGNALING_DISCOVERY_PATH, signalingBase).toString();
+  } catch {
+    return []; // unparseable base URL
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return [];
+    const body = (await res.json()) as unknown;
+    if (!Array.isArray(body)) return [];
+    // The discovery list is untrusted network input; keep only well-formed ids
+    // that match our peer-id shape before they enter the dial loop.
+    return body.filter(
+      (id): id is string => typeof id === 'string' && id.startsWith(PEER_PREFIX),
+    );
+  } catch {
+    return []; // network error, abort/timeout, or malformed JSON
   }
 }
