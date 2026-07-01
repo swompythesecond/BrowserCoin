@@ -448,8 +448,17 @@ app.get('/stats', cheapLimiter, (_req, res) => {
 });
 
 app.get('/peers', cheapLimiter, (_req, res) => {
-  const ids = [...peers.keys()].slice(0, 64);
-  res.json({ peers: ids });
+  // Random sample, not first-64 by insertion order: with a full map the
+  // oldest entries would monopolize every slot, so freshly-joined (and most
+  // likely still dialable) nodes never surfaced to anyone (#20). Partial
+  // Fisher–Yates — only the 64 returned positions are shuffled.
+  const ids = [...peers.keys()];
+  const n = Math.min(64, ids.length);
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (ids.length - i));
+    [ids[i], ids[j]] = [ids[j]!, ids[i]!];
+  }
+  res.json({ peers: ids.slice(0, n) });
 });
 
 app.get('/helpers', cheapLimiter, (_req, res) => {

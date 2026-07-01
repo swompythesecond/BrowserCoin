@@ -53,6 +53,14 @@ const TX_REBROADCAST_MS = 15_000;
 const PEER_PREFIX = 'browsercoin-';
 const MAX_ORPHANS = 2048;
 const DIAL_TIMEOUT_MS = 8_000;
+// Backoff bounds for manually reconnecting a signaling Peer after
+// `disconnected`. PeerJS does NOT auto-reconnect — without an explicit
+// reconnect() a tab that loses its signaling websocket (server restart, proxy
+// idle timeout, laptop sleep) stays deregistered for the rest of its life:
+// undialable, yet still HTTP-heartbeating itself into the helpers' /peers
+// list as a ghost entry (#20).
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 60_000;
 // If we haven't received anything from a peer in this long, treat the
 // connection as dead and GC it. WebRTC's own `close` event is unreliable
 // when a remote tab vanishes — without an upper bound here the UI peer
@@ -191,6 +199,10 @@ export class PeerNetwork {
    * is freed; `open`/`close`/`error` clear it early when they do fire.
    */
   private dialTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Pending signaling-reconnect timers, keyed by signaling base URL. */
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Next reconnect delay per signaling URL — doubles per attempt, reset on `open`. */
+  private reconnectDelayMs = new Map<string, number>();
   /** Notified whenever a peer ID is observed (live or learned) so Node can persist it. */
   private peerSeenListeners = new Set<(id: string) => void>();
   /** Notified when a dial fails (dead ID) so Node can count failures / evict it. */
@@ -348,8 +360,11 @@ export class PeerNetwork {
       void this.heartbeat();
       this.pingAndReapStalePeers();
       if (this.connections.size < MIN_PEERS) {
-        void this.dialFromSignaling();
-        void this.dialFromBootstrap();
+        // Sequential so signaling discovery gets first pick of the dial slots
+        // (dialed via the correct per-server origin); the /peers union only
+        // fills whatever slots are left. Racing them lets a stale /peers id
+        // burn a `dialedThisSession` entry through an arbitrary origin first.
+        void this.dialFromSignaling().then(() => this.dialFromBootstrap());
       }
     }, HEARTBEAT_MS);
 
@@ -390,6 +405,9 @@ export class PeerNetwork {
       peer.on('open', () => {
         opened = true;
         this.opened.add(signalingUrl);
+        // Fires again after a successful reconnect() — reset the backoff so
+        // the next outage starts from the base delay.
+        this.reconnectDelayMs.delete(signalingUrl);
         this.markSignalingOpen(signalingUrl, true);
         resolve();
       });
@@ -421,10 +439,41 @@ export class PeerNetwork {
       peer.on('disconnected', () => {
         this.opened.delete(signalingUrl);
         this.markSignalingOpen(signalingUrl, false);
-        // PeerJS will auto-reconnect by default; we just reflect the gap.
+        // PeerJS does NOT auto-reconnect; without this the tab would stay
+        // deregistered from this signaling server until a page reload.
+        this.scheduleReconnect(signalingUrl);
       });
       peer.on('connection', (conn) => this.adoptConnection(conn));
     });
+  }
+
+  /**
+   * Arm a one-shot reconnect for a signaling Peer that lost its server
+   * connection. Exponential backoff with jitter: a signaling-server restart
+   * disconnects every tab at once, and without jitter they'd all stampede
+   * back on the same tick. A failed attempt fires `disconnected` again,
+   * which re-arms this — so it self-retries until `open` resets the delay.
+   */
+  private scheduleReconnect(signalingUrl: string): void {
+    if (this.reconnectTimers.has(signalingUrl)) return;
+    const base = this.reconnectDelayMs.get(signalingUrl) ?? RECONNECT_BASE_MS;
+    this.reconnectDelayMs.set(signalingUrl, Math.min(base * 2, RECONNECT_MAX_MS));
+    const delay = base / 2 + Math.random() * base; // jitter: 0.5x–1.5x of base
+    this.reconnectTimers.set(
+      signalingUrl,
+      setTimeout(() => {
+        this.reconnectTimers.delete(signalingUrl);
+        const peer = this.peers.get(signalingUrl);
+        // stop()/setSignalingServers() may have torn this Peer down since,
+        // or it may have recovered / errored fatally in the meantime.
+        if (!peer || peer.destroyed || !peer.disconnected) return;
+        try {
+          peer.reconnect();
+        } catch {
+          this.scheduleReconnect(signalingUrl); // retry with a longer delay
+        }
+      }, delay),
+    );
   }
 
   private markSignalingOpen(url: string, open: boolean): void {
@@ -445,6 +494,9 @@ export class PeerNetwork {
     for (const t of this.dialTimers.values()) clearTimeout(t);
     this.dialTimers.clear();
     this.dialing.clear();
+    for (const t of this.reconnectTimers.values()) clearTimeout(t);
+    this.reconnectTimers.clear();
+    this.reconnectDelayMs.clear();
     for (const peer of this.peers.values()) {
       try { peer.destroy(); } catch { /* ignore */ }
     }
