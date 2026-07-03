@@ -169,10 +169,15 @@ async function loadHelperRecordsFromDisk(): Promise<void> {
 
 /** Serialize the canonical chain (excluding genesis) to the on-disk JSON shape. */
 function serializeChain(): string {
+  // iterateCanonical yields tip-first (descending height). Collect with push
+  // then reverse to get genesis-first — O(n). The old unshift-per-block made
+  // this O(n²), which on a 20k+ block chain took long enough to stall the
+  // event loop on every save.
   const blocks: string[] = [];
   for (const cb of chain.iterateCanonical()) {
-    if (cb.block.header.height > 0) blocks.unshift(bytesToHex(encodeBlock(cb.block)));
+    if (cb.block.header.height > 0) blocks.push(bytesToHex(encodeBlock(cb.block)));
   }
+  blocks.reverse();
   return JSON.stringify({ version: 1, chainVersion: CHAIN_VERSION, blocks });
 }
 
@@ -183,26 +188,34 @@ async function saveChainToDiskNow(): Promise<void> {
 }
 
 /**
- * Coalescing serializer for chain saves. Concurrent block POSTs used to race
- * on the same chain.json.tmp file — first rename consumed it, second rename
- * hit ENOENT. We now keep at most one save in flight; any saves requested
- * while it's running just set a "do one more after this" flag, then a single
- * trailing save captures the latest chain state.
+ * Throttled chain persistence. Serializing + writing the entire (multi-MB)
+ * chain file synchronously on *every* accepted block blocked the event loop;
+ * once the chain grew past ~20k blocks the API could no longer keep up with
+ * incoming block/heartbeat traffic and became unresponsive.
+ *
+ * Accepted blocks now just flag the chain dirty (O(1)). A timer flushes at
+ * most once per SAVE_INTERVAL_MS, and shutdown flushes a final time. At most
+ * one write is in flight, so concurrent flushes never race on the .tmp file.
  */
+const SAVE_INTERVAL_MS = 10_000;
+let chainDirty = false;
 let saveInFlight = false;
-let savePending = false;
 
-async function saveChainToDisk(): Promise<void> {
-  if (saveInFlight) {
-    savePending = true;
-    return;
-  }
+/** Mark that the canonical chain changed and should be persisted on the next tick. */
+function markChainDirty(): void {
+  chainDirty = true;
+}
+
+/** Write the chain to disk if it changed since the last successful write. */
+async function flushChainIfDirty(): Promise<void> {
+  if (!chainDirty || saveInFlight) return;
   saveInFlight = true;
+  chainDirty = false; // capture now; blocks arriving mid-write re-set this
   try {
-    do {
-      savePending = false;
-      await saveChainToDiskNow();
-    } while (savePending);
+    await saveChainToDiskNow();
+  } catch (e) {
+    chainDirty = true; // failed — retry on the next tick
+    console.warn('[chain] save failed:', (e as Error).message);
   } finally {
     saveInFlight = false;
   }
@@ -497,14 +510,21 @@ app.get('/tip', cheapLimiter, (_req, res) => {
 app.get('/blocks', readHeavyLimiter, (req, res) => {
   const fromHeight = Math.max(0, Number(req.query.fromHeight ?? 0));
   const max = Math.max(1, Math.min(200, Number(req.query.max ?? 100)));
-  // Walk canonical newest-first, unshift to get oldest-first.
+  const upper = fromHeight + max; // exclusive upper bound of the returned window
+  // Canonical walk is tip-first (descending height). Only encode the
+  // [fromHeight, fromHeight+max) window instead of the whole chain, and push +
+  // reverse for oldest-first ordering. Previously this encoded every block from
+  // the tip down to fromHeight and unshifted each (O(n²)) just to slice off
+  // `max` — a big event-loop stall on long chains and low fromHeight.
   const blocks: string[] = [];
   for (const cb of chain.iterateCanonical()) {
-    if (cb.block.header.height >= fromHeight) {
-      blocks.unshift(bytesToHex(encodeBlock(cb.block)));
-    }
+    const h = cb.block.header.height;
+    if (h >= upper) continue;
+    if (h < fromHeight) break;
+    blocks.push(bytesToHex(encodeBlock(cb.block)));
   }
-  res.json({ blocks: blocks.slice(0, max) });
+  blocks.reverse();
+  res.json({ blocks });
 });
 
 app.get('/mempool', cheapLimiter, (_req, res) => {
@@ -545,7 +565,9 @@ app.post('/block', heavyLimiter, async (req, res) => {
     const b = decodeBlock(hexToBytes(body.block));
     const result = await tryAdmitBlock(b);
     if (result.status === 'added') {
-      saveChainToDisk().catch((e) => console.warn('[chain] save failed:', e.message));
+      // Persistence is throttled (see flushChainIfDirty); just flag it here so
+      // block admission stays O(1) and the event loop keeps serving requests.
+      markChainDirty();
     }
     res.json(result);
   } catch (e) {
@@ -584,6 +606,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     void backupTick();
   }, BACKUP_CHECK_MS);
+  // Throttled chain persistence: flush at most once per SAVE_INTERVAL_MS.
+  setInterval(() => {
+    void flushChainIfDirty();
+  }, SAVE_INTERVAL_MS);
   server.listen(PORT, () => {
     console.log(`BrowserCoin API helper listening on :${PORT}`);
     console.log(`  Chain file:  ${path.basename(CHAIN_FILE)}`);
@@ -592,5 +618,29 @@ async function main(): Promise<void> {
     console.log(`  Stats:       http://localhost:${PORT}/stats`);
   });
 }
+
+// Because saves are throttled, up to SAVE_INTERVAL_MS of accepted blocks may be
+// unpersisted at any moment. On a clean stop/restart (pm2 sends SIGINT/SIGTERM)
+// flush them before exiting so a restart doesn't replay stale on-disk state.
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[chain] ${signal} received — flushing chain before exit`);
+  try {
+    // Wait out any in-flight throttled write, then force a final flush.
+    for (let i = 0; i < 100 && saveInFlight; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    chainDirty = true;
+    await flushChainIfDirty();
+  } catch (e) {
+    console.warn('[chain] shutdown flush failed:', (e as Error).message);
+  } finally {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 void main();
