@@ -38,6 +38,10 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must win even over inline display styles
+   (e.g. elements laid out with style="display:flex"). */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
