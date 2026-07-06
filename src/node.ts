@@ -199,12 +199,16 @@ export class Node {
       this.scheduleSnapshot();
     });
 
-    // A reorg deeper than SNAPSHOT_DEPTH needs finalized-prefix state we didn't
-    // materialize. Drop the snapshot so the next load full-replays from genesis
-    // (which materializes everything) — a refresh fully recovers. Practically
-    // unreachable given shallow real reorgs; this is a correctness backstop.
+    // A block arrived whose parent's state we no longer hold (pruned below the
+    // SNAPSHOT_DEPTH window, or below a snapshot anchor). Drop the snapshot so
+    // the next load replays from IDB blocks instead of trusting the anchor.
+    // Note the rolling state pruner means a replay keeps only the same window —
+    // a genuine reorg deeper than SNAPSHOT_DEPTH needs the Settings chain reset
+    // (wipe + network re-sync of the new branch). Practically unreachable given
+    // sync's 5-block overlap; stale fork blocks from peers land here too, and
+    // for those dropping the regenerable snapshot is harmless.
     this.chain.onSnapshotInvalidated(() => {
-      console.warn('[node] snapshot invalidated by deep reorg; clearing — refresh to fully re-materialize');
+      console.warn('[node] block references pruned state (reorg deeper than snapshot window?); clearing snapshot');
       void delMeta('stateSnapshot');
       this.lastSnapshotHeight = -1;
     });

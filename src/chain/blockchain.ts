@@ -14,6 +14,7 @@ import {
   MAX_BLOCK_BYTES,
   MAX_FUTURE_TIME_S,
   MTP_WINDOW,
+  SNAPSHOT_DEPTH,
 } from './genesis.js';
 
 // Retarget reads up to DIFFICULTY_WINDOW headers, and MTP at the window
@@ -36,11 +37,13 @@ export interface ChainBlock {
   work: bigint;            // cumulative work up to and including this block
   /**
    * Account state AFTER applying this block, or `null` if not materialized.
-   * Snapshot-restore keeps every block's data in memory (for the explorer, P2P
-   * serving, etc.) but only materializes state for the snapshot anchor and the
-   * tail above it — the finalized prefix is left `null` to skip the costly
-   * per-block clone + apply. The tip is always materialized; only `parent.state`
-   * (when extending) and the snapshot writer ever read a non-tip block's state.
+   * Only blocks within SNAPSHOT_DEPTH of the tip keep a materialized state:
+   * deeper states are pruned as the tip advances (and snapshot-restore never
+   * materializes them in the first place). Retaining one full state clone per
+   * block is O(blocks × accounts) — ~1.5 GB at h≈24.5k — which iOS Safari's
+   * per-tab memory limit can't hold; the tip is always materialized, and only
+   * `parent.state` (when extending) and the snapshot writer ever read a
+   * non-tip block's state, both within the kept window.
    */
   state: State | null;
 }
@@ -74,6 +77,15 @@ export class Blockchain {
   private blocks = new Map<string, ChainBlock>();
   /** The chain tip — the block with the highest cumulative work. */
   private tipHash!: string;
+  /**
+   * Hex hashes of every block at a height, across all branches. Lets the state
+   * pruner null out fork siblings too, not just the canonical block. Entries
+   * are dropped once their height is pruned — a block below the prune floor
+   * can never be accepted again (its parent's state is gone).
+   */
+  private byHeight = new Map<number, string[]>();
+  /** Heights below this have had their states pruned (monotonic). */
+  private pruneFloor = 0;
   /** Listeners invoked after a block is accepted (any branch). Hash-hex passed for keying. */
   private acceptListeners = new Set<(cb: ChainBlock) => void>();
   /** Listeners invoked only when the canonical tip moves, with the mempool delta. */
@@ -86,7 +98,14 @@ export class Blockchain {
    */
   private snapshotInvalidatedListeners = new Set<() => void>();
 
-  constructor() {
+  /**
+   * `stateRetentionDepth` is how many blocks below the tip keep a materialized
+   * state (see `pruneStates`). Tests shrink it to exercise pruning without
+   * mining SNAPSHOT_DEPTH real-PoW blocks; production uses the default — it
+   * must be ≥ SNAPSHOT_DEPTH or the snapshot writer would find its anchor
+   * state already pruned.
+   */
+  constructor(private readonly stateRetentionDepth: number = SNAPSHOT_DEPTH) {
     this.initGenesis();
   }
 
@@ -99,6 +118,7 @@ export class Blockchain {
       work: blockWork(GENESIS.header.difficulty),
       state: emptyState(),
     });
+    this.indexHeight(0, genHashHex);
     this.tipHash = genHashHex;
   }
 
@@ -108,7 +128,42 @@ export class Blockchain {
    */
   reset(): void {
     this.blocks.clear();
+    this.byHeight.clear();
+    this.pruneFloor = 0;
     this.initGenesis();
+  }
+
+  private indexHeight(height: number, hashHex: string): void {
+    const bucket = this.byHeight.get(height);
+    if (bucket) bucket.push(hashHex);
+    else this.byHeight.set(height, [hashHex]);
+  }
+
+  /**
+   * Null out materialized states more than SNAPSHOT_DEPTH below the tip. Called
+   * whenever the tip advances. Keeping a state clone per block is
+   * O(blocks × accounts) and grows without bound; everything the node does with
+   * historical blocks (explorer, P2P serving, wallet history) reads block DATA,
+   * which stays — only the derived per-height account state is dropped. This is
+   * the same shape a snapshot-restored tab already runs in. The floor is
+   * monotonic and each height is visited once, so cost is O(1) amortized per
+   * accepted block. Trade-off: a reorg forking below the floor can't be
+   * validated (fires onSnapshotInvalidated) — it needs a reorg deeper than
+   * SNAPSHOT_DEPTH, which sync's 5-block overlap makes practically unreachable.
+   */
+  private pruneStates(): void {
+    const boundary = this.height - this.stateRetentionDepth;
+    while (this.pruneFloor < boundary) {
+      const hashes = this.byHeight.get(this.pruneFloor);
+      if (hashes) {
+        for (const hex of hashes) {
+          const cb = this.blocks.get(hex);
+          if (cb) cb.state = null;
+        }
+        this.byHeight.delete(this.pruneFloor);
+      }
+      this.pruneFloor++;
+    }
   }
 
   /** Subscribe to every accepted block (canonical or fork). Returns an unsubscribe fn. */
@@ -288,10 +343,12 @@ export class Blockchain {
     const work = parent.work + blockWork(header.difficulty);
     const accepted: ChainBlock = { block, hash, work, state: newState };
     this.blocks.set(hashHex, accepted);
+    this.indexHeight(header.height, hashHex);
 
     const prevTipHex = this.tipHash;
     if (work > this.tip.work) {
       this.tipHash = hashHex;
+      this.pruneStates();
     }
     for (const fn of this.acceptListeners) fn(accepted);
 
@@ -380,6 +437,7 @@ export class Blockchain {
 
     const work = parent.work + blockWork(header.difficulty);
     this.blocks.set(hashHex, { block, hash, work, state });
+    this.indexHeight(header.height, hashHex);
 
     if (state !== null) {
       // The designated canonical anchor — force it to be the tip so the tail
