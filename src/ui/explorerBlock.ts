@@ -39,7 +39,7 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
     const hashHex = bytesToHex(cb.hash);
     const canonical = h.height === 0 || index.hashAtHeight(h.height) === hashHex;
     let fees = 0n;
-    for (const tx of cb.block.transactions) fees += tx.fee;
+    if (cb.hasBody) for (const tx of cb.block.transactions) fees += tx.fee;
     const reward = h.height === 0 ? 0n : blockReward(h.height);
     const prevHex = bytesToHex(h.prevHash);
     const nextHash = index.hashAtHeight(h.height + 1);
@@ -60,7 +60,7 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
           <dt>previous</dt><dd>${h.height === 0 ? '<span class="muted">—</span>' : blockLink(prevHex, prevHex)}</dd>
           <dt>time</dt><dd>${new Date(h.timestamp * 1000).toLocaleString()} <span class="muted">(${blockTime(h.timestamp)})</span></dd>
           <dt>miner</dt><dd>${h.height === 0 ? '<span class="muted">— (genesis)</span>' : addressLink(bytesToHex(h.miner), bytesToHex(h.miner))}</dd>
-          <dt>reward</dt><dd>${formatAmount(reward)} ${TICKER} <span class="muted">+ ${formatAmount(fees)} ${TICKER} fees</span></dd>
+          <dt>reward</dt><dd>${formatAmount(reward)} ${TICKER} <span class="muted">${cb.hasBody ? `+ ${formatAmount(fees)} ${TICKER} fees` : '+ fees (pending download)'}</span></dd>
           <dt>difficulty</dt><dd>${difficultyBits(h.difficulty)} bits <span class="muted">(compact 0x${h.difficulty.toString(16).padStart(8, '0')})</span></dd>
           <dt>nonce</dt><dd>${h.nonce}</dd>
           <dt>tx root</dt><dd class="muted">${bytesToHex(h.txRoot)}</dd>
@@ -69,8 +69,10 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
       </section>
 
       <section class="card mt-md">
-        <h3 class="card-title">${cb.block.transactions.length} transaction${cb.block.transactions.length === 1 ? '' : 's'}</h3>
-        ${cb.block.transactions.length === 0
+        <h3 class="card-title">${cb.hasBody ? `${cb.block.transactions.length} transaction${cb.block.transactions.length === 1 ? '' : 's'}` : 'Transactions'}</h3>
+        ${!cb.hasBody
+          ? `<p class="muted text-sm mt-md" style="font-style:italic;">Not downloaded yet — history is still syncing in the background.</p>`
+          : cb.block.transactions.length === 0
           ? `<p class="muted text-sm mt-md" style="font-style:italic;">Coinbase only (block reward).</p>`
           : `<div class="table-scroll mt-md"><table class="table">
               <thead><tr><th>tx</th><th>type</th><th>from</th><th class="col-hide-sm">to</th><th>amount</th><th class="col-hide-sm">fee</th></tr></thead>

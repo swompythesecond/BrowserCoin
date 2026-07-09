@@ -44,6 +44,8 @@ export interface BlockSummary {
   txCount: number;
   fees: bigint;
   difficulty: number;
+  /** False while the block's tx body hasn't been backfilled yet (fast sync). */
+  hasBody: boolean;
 }
 
 export interface RichRow {
@@ -108,6 +110,15 @@ export class ExplorerIndex {
     this.rebuild();
   }
 
+  /**
+   * Force the next `ensureFresh()` to rebuild. Called when block bodies were
+   * attached outside the tip-move event stream (background history backfill).
+   */
+  markStale(): void {
+    this.stale = true;
+    this.version++;
+  }
+
   private rebuild(): void {
     this.byAddress.clear();
     this.txLoc.clear();
@@ -134,6 +145,12 @@ export class ExplorerIndex {
     if (h.height === 0) return; // genesis credits nobody
     const hashHex = bytesToHex(cb.hash);
     this.heightToHash.set(h.height, hashHex);
+
+    // Fast-sync prefix: the header is known but the tx body isn't downloaded
+    // yet, so per-address stats can't be computed. The height mapping above
+    // still lets the block list render the row; `markStale()` after backfill
+    // completes triggers the full rebuild that fills the stats in.
+    if (!cb.hasBody) return;
 
     let totalFees = 0n;
     for (const tx of cb.block.transactions) totalFees += tx.fee;
@@ -178,6 +195,8 @@ export class ExplorerIndex {
     if (h.height === 0) return;
     const hashHex = bytesToHex(cb.hash);
     if (this.heightToHash.get(h.height) === hashHex) this.heightToHash.delete(h.height);
+
+    if (!cb.hasBody) return; // never contributed address stats
 
     let totalFees = 0n;
     for (const tx of cb.block.transactions) totalFees += tx.fee;
@@ -310,14 +329,15 @@ export class ExplorerIndex {
       const cb = this.chain.getBlock(hash);
       if (!cb) continue;
       let fees = 0n;
-      for (const tx of cb.block.transactions) fees += tx.fee;
+      if (cb.hasBody) for (const tx of cb.block.transactions) fees += tx.fee;
       out.push({
         height,
         hash,
         ts: cb.block.header.timestamp,
-        txCount: cb.block.transactions.length,
+        txCount: cb.hasBody ? cb.block.transactions.length : 0,
         fees,
         difficulty: cb.block.header.difficulty,
+        hasBody: cb.hasBody,
       });
     }
     return out;

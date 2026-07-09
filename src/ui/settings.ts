@@ -444,6 +444,10 @@ https://server2.example"></textarea>
   const unsubChain = node.onChain(renderChainStats);
 
   exportChainBtn.addEventListener('click', () => {
+    if (!node.chain.hasFullHistory) {
+      flash(chainMsg, 'Block history is still downloading in the background — try again once it completes.', 'red');
+      return;
+    }
     exportChainBtn.disabled = true;
     flash(chainMsg, 'Encoding blocks…', 'muted');
     try {
