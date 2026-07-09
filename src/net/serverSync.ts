@@ -4,7 +4,16 @@ import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Mempool } from '../chain/mempool.js';
 import { decodeTx, encodeTx, txHash, type Transaction } from '../chain/transaction.js';
 import { VerifierPool, configuredVerifierCores } from '../chain/verifierPool.js';
-import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, tryRead } from './apiFanout.js';
+import { fanoutWrite, fanoutWriteWith, noteFailure, noteSuccess, reachableCount, readJsonCapped, tryRead } from './apiFanout.js';
+import {
+  attemptFastSync,
+  fastSyncEligible,
+  type FastSyncPersistData,
+  type FastSyncProgress,
+} from './fastSync.js';
+
+// Re-export so existing importers (tests) keep working after the move to apiFanout.
+export { readJsonCapped };
 import {
   HELPER_DISCOVERY_NETWORK,
   helperWellKnownUrl,
@@ -117,6 +126,21 @@ export class ServerSync {
   /** Lazily-created pool of PoW verifier workers. */
   private verifier: VerifierPool | null = null;
 
+  /**
+   * Fast sync runs at most once per session: on failure the normal full sync
+   * takes over, and retrying a failed/poisoned fast path would just burn time.
+   */
+  private fastSyncTried = false;
+  private fastSyncHooks: {
+    onProgress?: (p: FastSyncProgress) => void;
+    persist?: (data: FastSyncPersistData) => Promise<void>;
+  } = {};
+
+  /** Node injects UI-progress + IDB-persistence callbacks for fast sync. */
+  setFastSyncHooks(hooks: ServerSync['fastSyncHooks']): void {
+    this.fastSyncHooks = hooks;
+  }
+
   constructor(
     private chain: Blockchain,
     private mempool: Mempool,
@@ -140,6 +164,11 @@ export class ServerSync {
   private getVerifier(): VerifierPool {
     if (!this.verifier) this.verifier = new VerifierPool(configuredVerifierCores());
     return this.verifier;
+  }
+
+  /** Shared PoW verifier pool — also used by the history backfill sweep. */
+  verifierPool(): VerifierPool {
+    return this.getVerifier();
   }
 
   /**
@@ -401,7 +430,8 @@ export class ServerSync {
     }
   }
 
-  private async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  /** Fetch with the per-request timeout. Public: fastSync + backfill reuse it. */
+  async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -439,6 +469,38 @@ export class ServerSync {
       // this, the user stares at "Connecting · local 300 / server —" for the
       // entire bulk catchup, then it snaps to ready with no progress shown.
       this.emit();
+
+      // Fresh tab, deep backlog → try the headers+snapshot fast path once. On
+      // success the chain jumps to a verified anchor ~SNAPSHOT_DEPTH below the
+      // tip and the tail is pulled as full blocks right below; any non-ok
+      // outcome (old servers, verification failure) falls through to the
+      // normal full sync unchanged.
+      if (!this.fastSyncTried && fastSyncEligible(this.chain.height, tip.height)) {
+        this.fastSyncTried = true;
+        const res = await attemptFastSync({
+          chain: this.chain,
+          servers: this.apiServers,
+          fetchImpl: (url) => this.fetchWithTimeout(url),
+          // Thunked so the worker pool is only spun up if fast sync actually
+          // reaches its PoW-sampling step (not on the unsupported/404 path).
+          verifier: { verifyAll: (blocks) => this.getVerifier().verifyAll(blocks) },
+          onProgress: this.fastSyncHooks.onProgress,
+          persist: this.fastSyncHooks.persist,
+        }, tip);
+        if (res.status === 'ok') {
+          console.log(`[serverSync] fast sync: verified anchor at h=${res.anchorHeight}; pulling tail`);
+          // The anchor is finalized-depth below the tip, so no reorg overlap
+          // is needed — and overlapping would just hit hash-dedup on the
+          // bodyless prefix. The chain changed regardless of the tail
+          // (the anchor seed moved the tip), so always notify.
+          await this.pullFrom(res.anchorHeight + 1);
+          this.onUpdate();
+        } else if (res.status === 'unsupported') {
+          console.log('[serverSync] fast sync unsupported by configured servers; full sync');
+        } else if (res.status === 'failed') {
+          console.warn('[serverSync] fast sync failed, falling back to full sync:', res.reason);
+        }
+      }
 
       const ourHeight = this.chain.height;
       const ourTipHex = bytesToHex(this.chain.tip.hash);
@@ -560,6 +622,7 @@ export class ServerSync {
     const pending: Block[] = [];
     for (const cb of this.chain.iterateCanonical()) {
       if (cb.block.header.height < fromHeight) break;
+      if (!cb.hasBody) break; // fast-sync prefix: bodies not downloaded yet
       pending.push(cb.block);
     }
     pending.reverse();
@@ -632,42 +695,6 @@ export class ServerSync {
     const body = JSON.stringify({ txs: txs.map((tx) => bytesToHex(encodeTx(tx))) });
     return fanoutWrite(this.apiServers, '/txs', body);
   }
-}
-
-/**
- * Read a response body as JSON, aborting if it exceeds `maxBytes`. Unlike
- * `response.json()` — which buffers the entire body before we can react — this
- * streams and bails the moment the cap is crossed, so a hostile helper can't
- * OOM the tab with a giant `/helpers` payload. Falls back to `response.json()`
- * when the runtime has no streaming body (e.g. jsdom in tests).
- */
-export async function readJsonCapped(response: Response, maxBytes: number): Promise<unknown> {
-  const body = response.body;
-  if (!body || typeof body.getReader !== 'function') return response.json();
-
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      total += value.byteLength;
-      if (total > maxBytes) throw new Error('helper response too large');
-      chunks.push(value);
-    }
-  } finally {
-    try { await reader.cancel(); } catch { /* already drained */ }
-  }
-
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return JSON.parse(new TextDecoder().decode(merged));
 }
 
 function sameHelperRecordSet(a: HelperRecord[], b: HelperRecord[]): boolean {

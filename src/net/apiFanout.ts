@@ -145,6 +145,42 @@ export async function fanoutWrite(
 }
 
 /**
+ * Read a response body as JSON, aborting if it exceeds `maxBytes`. Unlike
+ * `response.json()` — which buffers the entire body before we can react — this
+ * streams and bails the moment the cap is crossed, so a hostile helper can't
+ * OOM the tab with a giant payload. Falls back to `response.json()` when the
+ * runtime has no streaming body (e.g. jsdom in tests).
+ */
+export async function readJsonCapped(response: Response, maxBytes: number): Promise<unknown> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== 'function') return response.json();
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error('helper response too large');
+      chunks.push(value);
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already drained */ }
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(merged));
+}
+
+/**
  * Variant of fanoutWrite that returns one result *per* server (with which
  * server it came from). Used when the caller needs to act on each response —
  * e.g. ServerSync's block push needs to know if a server flagged "orphan,

@@ -163,6 +163,32 @@ describe('server bridge mempool gating', () => {
     expect(paths).toContain('GET /mempool');
   });
 
+  it('tries fast sync once on a deep backlog, then falls back to full sync', async () => {
+    const chain = new Blockchain();
+    const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {});
+    const paths: string[] = [];
+    const tipHash = bytesToHex(chain.tip.hash);
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const u = new URL(url.toString());
+      paths.push(`${init?.method ?? 'GET'} ${u.pathname}`);
+      const json = (data: unknown) => ({ ok: true, status: 200, json: async () => data });
+      // Deep backlog → fast-sync eligible; /headers 404s (old server build).
+      if (u.pathname === '/tip') return json({ height: 5000, tipHash });
+      if (u.pathname === '/headers') return { ok: false, status: 404, json: async () => ({}) };
+      if (u.pathname === '/blocks') return json({ blocks: [] });
+      if (u.pathname === '/mempool') return json({ txs: [] });
+      return json({});
+    }));
+
+    await runSync(sync);
+    expect(paths.filter((p) => p === 'GET /headers').length).toBe(1);
+    expect(paths).toContain('GET /blocks'); // fell back to the normal pull
+
+    // Second tick: fast sync is once-per-session — no /headers retry.
+    await runSync(sync);
+    expect(paths.filter((p) => p === 'GET /headers').length).toBe(1);
+  });
+
   it('pushTx POSTs the authored tx to the server for durability', async () => {
     const chain = new Blockchain();
     const sync = new ServerSync(chain, new Mempool(), ['http://x'], () => {});

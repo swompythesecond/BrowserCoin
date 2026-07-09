@@ -130,6 +130,20 @@ function refreshTopbar(): void {
   stat('difficulty').textContent = `diff ${bits} bits`;
   stat('difficulty').title = `compact 0x${node.chain.tipDifficulty.toString(16)} — hash must have ${bits} leading zero bits`;
 
+  // History pill: visible only while a fast-synced tab is still backfilling
+  // old block bodies. Balances are already final — this is history/explorer
+  // completeness only.
+  const hist = stat('history');
+  const bf = node.getBackfillStatus();
+  if (bf.total > 0 && bf.remaining > 0) {
+    hist.hidden = false;
+    const pct = Math.round(((bf.total - bf.remaining) / bf.total) * 100);
+    hist.textContent = `history ${pct}%`;
+    hist.title = 'Downloading full block history in the background — balances are already verified and final.';
+  } else {
+    hist.hidden = true;
+  }
+
   const ss = node.serverSync?.getStatus();
   if (node.network?.getStatus().myId) {
     netDot.className = 'stat-dot live';
@@ -146,6 +160,7 @@ function leadingZeroBits(compact: number): number {
   return 256 - target.toString(2).length;
 }
 node.onChain(refreshTopbar);
+node.onBackfill(refreshTopbar);
 setInterval(refreshTopbar, 1500);
 refreshTopbar();
 
@@ -164,6 +179,8 @@ const PHASE_LABEL: Record<string, string> = {
   connecting: 'looking for a network',
   fetching:   'reaching the network',
   verifying:  'verifying blocks',
+  headers:    'checking block headers',
+  snapshot:   'verifying balance snapshot',
   ready:      'ready',
   offline:    'offline — network unreachable',
 };
@@ -178,6 +195,8 @@ const PHASE_TITLE: Record<string, string> = {
   connecting: 'Connecting to the network',
   fetching:   'Connecting to the network',
   verifying:  'Syncing the chain',
+  headers:    'Fast-syncing the chain',
+  snapshot:   'Fast-syncing the chain',
   ready:      'Ready',
   offline:    "Can't reach the network",
 };
@@ -190,9 +209,13 @@ const PHASE_SUB: Record<string, string> = {
     'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is — your balance will load as soon as someone answers.',
   verifying:
     'Every browser is its own full node — no trusted central server. We re-check each block\'s proof-of-work locally before showing you any balance, so the chain is yours, not the server\'s word. This only happens once per fresh tab; reloads use the cached chain.',
+  headers:
+    'Downloading and checking every block header — the hash chain, the difficulty schedule, and spot-checked proof-of-work. No server is trusted; full blocks download in the background after you\'re ready.',
+  snapshot:
+    'Fetching a compact snapshot of every balance and verifying it against the header chain\'s state commitment — the snapshot can\'t be forged without redoing the chain\'s proof-of-work.',
   ready:      '',
   offline:
-    'The bootstrap server is unreachable and no peers have answered. You can continue offline and try again later — balances will be from your last cached state.',
+    'The bootstrap server is unreachable and no peers have answered. You can continue with your last cached state — syncing keeps retrying in the background, and mining unlocks once the chain catches up.',
 };
 
 overlayDismiss.addEventListener('click', () => node.dismissSyncOverlay());
@@ -277,11 +300,22 @@ function paintSync(): void {
     return;
   }
   overlay.classList.remove('hidden');
-  const target = Math.max(s.targetHeight, s.localHeight, 1);
-  const pct = target > 0 ? Math.min(100, Math.round((s.localHeight / target) * 100)) : 0;
-  overlayBar.style.width = `${pct}%`;
-  const eta = estimateRemaining(s.localHeight, s.targetHeight, s.phase);
-  overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '—'}${eta}`;
+  if ((s.phase === 'headers' || s.phase === 'snapshot') && s.aux) {
+    // Fast sync: the chain height doesn't move until the verified anchor is
+    // seeded in one step, so progress comes from the aux counters instead.
+    const total = Math.max(1, s.aux.total);
+    const pct = Math.min(100, Math.round((s.aux.done / total) * 100));
+    overlayBar.style.width = `${pct}%`;
+    overlayMeta.textContent = s.phase === 'headers'
+      ? `headers ${s.aux.done} / ${total}`
+      : 'verifying balances against the chain';
+  } else {
+    const target = Math.max(s.targetHeight, s.localHeight, 1);
+    const pct = target > 0 ? Math.min(100, Math.round((s.localHeight / target) * 100)) : 0;
+    overlayBar.style.width = `${pct}%`;
+    const eta = estimateRemaining(s.localHeight, s.targetHeight, s.phase);
+    overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '—'}${eta}`;
+  }
   overlayPhase.textContent = PHASE_LABEL[s.phase] ?? s.phase;
   overlayTitle.textContent = PHASE_TITLE[s.phase] ?? 'Connecting';
   overlaySub.textContent = PHASE_SUB[s.phase] ?? '';
