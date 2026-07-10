@@ -74,6 +74,7 @@ export class HistoryBackfill {
     this.started = true;
     this.total = this.deps.chain.bodylessCount;
     if (this.total === 0) return;
+    console.log(`[backfill] starting: ${this.total} historical block bodies to download + verify`);
     void this.loop();
   }
 
@@ -134,7 +135,10 @@ export class HistoryBackfill {
     if (from === 0) return 0;
 
     const body = await this.fetchBlocks(from, BACKFILL_BATCH);
-    if (!body || body.blocks.length === 0) return 0;
+    if (!body || body.blocks.length === 0) {
+      console.warn(`[backfill] no server returned blocks from h=${from} — retrying later`);
+      return 0;
+    }
 
     const decoded: Block[] = [];
     for (const hex of body.blocks) {
@@ -196,6 +200,11 @@ export class HistoryBackfill {
       } catch (e) {
         console.warn('[backfill] idb persist failed:', (e as Error).message);
       }
+    }
+    if (attached > 0) {
+      console.log(`[backfill] attached ${attached} block bodies from h=${from}; ${chain.bodylessCount} remaining`);
+    } else {
+      console.warn(`[backfill] batch from h=${from}: ${decoded.length} blocks fetched, 0 attached — retrying later`);
     }
     return attached;
   }

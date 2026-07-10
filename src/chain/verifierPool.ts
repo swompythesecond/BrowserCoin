@@ -78,6 +78,7 @@ export class VerifierPool {
 
   /** Retire a wedged/dead worker, requeue its job, and backfill the pool. */
   private failWorker(w: Worker): void {
+    console.warn('[verifierPool] worker failed or stalled — retiring it and retrying its job');
     const entry = this.busy.get(w);
     if (entry) {
       clearTimeout(entry.timer);

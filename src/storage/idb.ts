@@ -69,7 +69,10 @@ export async function putBlock(hash: string, height: number, encoded: Uint8Array
   const db = await open();
   const tx = db.transaction(BLOCKS_STORE, 'readwrite');
   tx.objectStore(BLOCKS_STORE).put({ hash, height, encoded } satisfies StoredBlock);
-  await wrap(tx as unknown as IDBRequest<void>).catch(() => {}); // tx complete via onsuccess of empty
+  // NOTE: never `wrap(tx)` — IDBTransaction has no `onsuccess`, so that promise
+  // never settles on the happy path. Harmless for fire-and-forget callers, but
+  // it deterministically froze the first caller to actually await putBlock
+  // (history backfill, stuck at "history 0%" after the first batch).
   await new Promise<void>((res, rej) => {
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
