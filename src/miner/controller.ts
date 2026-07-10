@@ -154,9 +154,21 @@ export class MinerController {
    *  is roughly 250x the expected per-hash latency — only a true stall hits
    *  this. */
   private static readonly STALE_RESPAWN_MS = 30_000;
-  /** Hashrates older than this are dropped from the aggregate `hashesPerSecond`
-   *  so the displayed live H/s doesn't count frozen reports from dead workers. */
-  private static readonly STALE_RATE_MS = 10_000;
+  /**
+   * The live `hashesPerSecond` is actual hashes completed over this rolling
+   * window. It used to be the SUM of each worker's last self-reported burst
+   * rate, which badly overstated under memory-bandwidth thrash: with far more
+   * workers than the memory bus supports (Argon2id wants ~32 MB each), workers
+   * alternate short bursts and long stalls, and summing "most recent burst
+   * rate" counts stalled workers as if they were still hashing — one user saw
+   * live 640 H/s while the machine truly did ~150. Counting completed hashes
+   * over a window cannot be fooled by duty-cycling.
+   */
+  private static readonly RATE_WINDOW_MS = 10_000;
+  /** deltaHashes reports inside the rolling window (time-ascending). */
+  private recentHashEvents: Array<{ t: number; hashes: number }> = [];
+  /** performance.now() at session start — denominator floor while the window fills. */
+  private rateWindowAnchor = 0;
 
   constructor(
     private chain: Blockchain,
@@ -261,6 +273,8 @@ export class MinerController {
     this.status.blockedReason = undefined;
     this.status.running = true;
     this.status.totalHashes = 0;
+    this.recentHashEvents = [];
+    this.rateWindowAnchor = performance.now();
     this.status.sessionStartedAt = Date.now();
     this.status.attemptCount = 0;
     this.status.attemptStartedAt = null;
@@ -286,6 +300,7 @@ export class MinerController {
     this.status.running = false;
     this.stopHealthTimer();
     this.terminateWorkers();
+    this.recentHashEvents = [];
     this.status.hashesPerSecond = 0;
     this.status.sessionStartedAt = null;
     this.status.attemptStartedAt = null;
@@ -325,18 +340,30 @@ export class MinerController {
     for (const fn of this.statusListeners) fn(snap);
   }
 
-  /** Recompute the aggregate hashrate from per-worker rates, dropping anyone
-   *  whose last report is older than `STALE_RATE_MS`. Without this, the live
-   *  H/s number would keep summing frozen rates from workers that have stopped
-   *  doing work — exactly the "live 72 H/s but only 26 H/s actually done"
-   *  symptom. */
+  /**
+   * Live hashrate = hashes actually completed in the last RATE_WINDOW_MS,
+   * divided by the window. Because it integrates real completed work (the same
+   * `deltaHashes` stream `totalHashes` uses), it stays honest when
+   * oversubscribed workers duty-cycle between bursts and stalls — unlike the
+   * old sum-of-last-burst-rates, which counted stalled workers at full speed
+   * for up to 10 s after their last report. Called on every worker report and
+   * once per health tick, so the number also decays to 0 when reports stop.
+   */
   private recomputeHashrate(now: number): void {
-    let total = 0;
-    for (let i = 0; i < this.workerHashrates.length; i++) {
-      const age = now - (this.workerLastReportAt[i] ?? now);
-      if (age < MinerController.STALE_RATE_MS) total += this.workerHashrates[i] ?? 0;
-    }
-    this.status.hashesPerSecond = total;
+    const cutoff = now - MinerController.RATE_WINDOW_MS;
+    let drop = 0;
+    while (drop < this.recentHashEvents.length && this.recentHashEvents[drop]!.t < cutoff) drop++;
+    if (drop > 0) this.recentHashEvents.splice(0, drop);
+    let hashes = 0;
+    for (const e of this.recentHashEvents) hashes += e.hashes;
+    // While the window is still filling after start(), divide by the time
+    // actually observed so the first seconds aren't understated; floor at 1 s
+    // so the very first report can't print a spike.
+    const observedMs = Math.max(
+      1000,
+      Math.min(MinerController.RATE_WINDOW_MS, now - this.rateWindowAnchor),
+    );
+    this.status.hashesPerSecond = (hashes * 1000) / observedMs;
   }
 
   /** Replace a single worker in place — used when one has gone silent so we
@@ -489,6 +516,7 @@ export class MinerController {
         this.workerHashrates[idx] = msg.hashesPerSecond;
         this.workerLastReportAt[idx] = now;
         this.status.totalHashes += msg.deltaHashes;
+        this.recentHashEvents.push({ t: now, hashes: msg.deltaHashes });
         this.recomputeHashrate(now);
         this.status.workerHashrates = this.workerHashrates.slice();
         this.status.workerLastReportAt = this.workerLastReportAt.slice();
