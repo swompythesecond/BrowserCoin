@@ -9,6 +9,8 @@
  *   GET  /                          plain-text info page
  *   GET  /tip                       latest known height + tip hash
  *   GET  /blocks?fromHeight=N&max=M canonical blocks (oldest-first), up to max
+ *   GET  /headers?fromHeight=N&max=M canonical headers, concatenated hex (fast sync)
+ *   GET  /snapshot                  account state at a finalized height (fast sync)
  *   POST /block                     submit a block; server validates + persists
  *   GET  /stats                     informational (peer count etc.)
  *   GET  /peers                     active peer ids for browsers to dial
@@ -27,14 +29,17 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Blockchain } from '../src/chain/blockchain.js';
-import { decodeBlock, encodeBlock, hashHeader, type Block } from '../src/chain/block.js';
+import { decodeBlock, encodeBlock, encodeHeader, hashHeader, type Block } from '../src/chain/block.js';
 import { bytesToHex, hexToBytes } from '../src/util/binary.js';
 import { Mempool } from '../src/chain/mempool.js';
 import { decodeTx, encodeTx, type Transaction } from '../src/chain/transaction.js';
+import { serializeLocks, serializeState } from '../src/chain/state.js';
+import { SNAPSHOT_DEPTH } from '../src/chain/genesis.js';
 import { parsePort } from './lib/cli.js';
 import { parseHelperResponse } from '../src/net/helperDiscovery.js';
 import { BROWSERCOIN_NETWORK } from '../src/net/network.js';
@@ -56,6 +61,17 @@ const CHAIN_VERSION = BROWSERCOIN_NETWORK;
  * doesn't make the count flicker.
  */
 const MINING_TTL_MS = 90_000;
+
+/** Max headers per GET /headers response. 4000 × 148 B ≈ 592 KB raw (~1.2 MB hex). */
+const HEADERS_MAX = 4000;
+/**
+ * Rebuild the GET /snapshot cache at most every this many tip advances
+ * (~50 min at target pace). Serializing + gzipping the full account state per
+ * request would stall the event loop under the 60/min read limit; serving a
+ * slightly-stale cached snapshot is fine — clients accept any anchor within
+ * their FAST_SYNC_MAX_TAIL window and replay the tail normally.
+ */
+const SNAPSHOT_REGEN_BLOCKS = 20;
 
 /**
  * Per-IP rate limits. In-memory only — Redis would only be needed if this
@@ -113,6 +129,55 @@ chain.onTipChanged(({ confirmed, restored }) => {
 /** Orphan blocks (parent unknown) keyed by their parent hash hex. */
 const orphans = new Map<string, Block>();
 const MAX_ORPHANS = 2048;
+
+// ─── GET /snapshot cache ─────────────────────────────────────────────────────
+// The wire shape matches server/tools/archive.ts's SnapshotFile: the state
+// AFTER block `height`, verifiable against that block header's PoW-committed
+// stateRoot. Regenerated off the request path (deferred, throttled) so the
+// endpoint itself is O(1).
+
+interface SnapshotCache {
+  json: string;
+  gz: Buffer;
+  height: number;
+}
+let snapshotCache: SnapshotCache | null = null;
+let snapshotRegenScheduled = false;
+
+function regenSnapshotCache(): void {
+  const finalizedHeight = chain.height - SNAPSHOT_DEPTH;
+  if (finalizedHeight <= 0) return;
+  if (snapshotCache && snapshotCache.height === finalizedHeight) return;
+  const at = chain.snapshotAt(finalizedHeight);
+  if (!at) return;
+  const json = JSON.stringify({
+    v: 1,
+    chainVersion: CHAIN_VERSION,
+    height: at.height,
+    hashHex: at.hashHex,
+    accounts: serializeState(at.state),
+    locks: serializeLocks(at.state),
+  });
+  snapshotCache = { json, gz: gzipSync(Buffer.from(json)), height: at.height };
+}
+
+function scheduleSnapshotRegen(): void {
+  if (snapshotRegenScheduled) return;
+  const due = chain.height - SNAPSHOT_DEPTH;
+  if (due <= 0) return;
+  if (snapshotCache && due - snapshotCache.height < SNAPSHOT_REGEN_BLOCKS) return;
+  snapshotRegenScheduled = true;
+  setImmediate(() => {
+    snapshotRegenScheduled = false;
+    try {
+      regenSnapshotCache();
+    } catch (e) {
+      console.warn('[snapshot] regen failed:', (e as Error).message);
+    }
+  });
+}
+
+chain.onTipChanged(() => scheduleSnapshotRegen());
 
 async function loadChainFromDisk(): Promise<void> {
   try {
@@ -527,6 +592,45 @@ app.get('/blocks', readHeavyLimiter, (req, res) => {
   res.json({ blocks });
 });
 
+app.get('/headers', readHeavyLimiter, (req, res) => {
+  // Canonical block headers, height-ascending, as ONE concatenated hex string
+  // (148 bytes per header) — decoded client-side with decodeHeader(buf, i*148).
+  // Genesis (height 0) is never served: clients hardcode it and verify header
+  // 1's prevHash against it. Same windowed walk as /blocks above.
+  const fromHeight = Math.max(1, Number(req.query.fromHeight ?? 1));
+  const max = Math.max(1, Math.min(HEADERS_MAX, Number(req.query.max ?? HEADERS_MAX)));
+  const upper = fromHeight + max; // exclusive
+  const parts: string[] = [];
+  for (const cb of chain.iterateCanonical()) {
+    const h = cb.block.header.height;
+    if (h >= upper) continue;
+    if (h < fromHeight) break;
+    parts.push(bytesToHex(encodeHeader(cb.block.header)));
+  }
+  parts.reverse();
+  res.json({ v: 1, fromHeight, count: parts.length, headers: parts.join('') });
+});
+
+app.get('/snapshot', readHeavyLimiter, (req, res) => {
+  // Served 100% from the pre-serialized (and pre-gzipped) cache — the state is
+  // a multi-hundred-KB JSON body and this endpoint must never stall the event
+  // loop (see SNAPSHOT_REGEN_BLOCKS). Clients verify the payload against the
+  // anchor header's PoW-committed stateRoot, so staleness/tampering are safe.
+  if (!snapshotCache) {
+    scheduleSnapshotRegen();
+    res.status(503).json({ error: 'snapshot not available yet' });
+    return;
+  }
+  res.setHeader('Content-Type', 'application/json');
+  const acceptsGzip = String(req.headers['accept-encoding'] ?? '').includes('gzip');
+  if (acceptsGzip) {
+    res.setHeader('Content-Encoding', 'gzip');
+    res.send(snapshotCache.gz);
+  } else {
+    res.send(snapshotCache.json);
+  }
+});
+
 app.get('/mempool', cheapLimiter, (_req, res) => {
   const txs = mempool.list().map((tx) => bytesToHex(encodeTx(tx)));
   res.json({ txs });
@@ -590,6 +694,8 @@ app.get('/', cheapLimiter, (_req, res) => {
       '  /heartbeat   — POST { id, height, mining }  browser keepalive',
       '  /tip         — JSON { height, tipHash }',
       '  /blocks      — GET ?fromHeight=N&max=M  canonical blocks',
+      '  /headers     — GET ?fromHeight=N&max=M  canonical headers (concatenated hex)',
+      '  /snapshot    — JSON account state at a finalized height (fast sync)',
       '  /block       — POST { block: <hex> }    submit a block',
       '  /mempool     — JSON list of pending tx hex',
       '  /txs         — POST { txs: [<hex>, …] } submit pending transactions',
@@ -600,6 +706,13 @@ app.get('/', cheapLimiter, (_req, res) => {
 async function main(): Promise<void> {
   await loadChainFromDisk();
   await loadHelperRecordsFromDisk();
+  // Build the initial /snapshot cache off the restored chain (no-op below
+  // SNAPSHOT_DEPTH). Synchronous here — the server isn't listening yet.
+  try {
+    regenSnapshotCache();
+  } catch (e) {
+    console.warn('[snapshot] initial build failed:', (e as Error).message);
+  }
   // Checkpoint scheduler: only starts after the chain is loaded so the first
   // backup reflects real state. backupTick decides "due" from existing files.
   await backupTick();

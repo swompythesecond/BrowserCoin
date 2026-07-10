@@ -97,6 +97,7 @@ export class ActivityIndex {
     this.address = address;
     this.byBlock.clear();
     for (const cb of canonical) {
+      if (!cb.hasBody) continue; // fast-sync prefix: txs not downloaded yet
       const rows = extractBlockRows(cb.block, address);
       if (rows.length) this.byBlock.set(bytesToHex(cb.hash), rows);
     }

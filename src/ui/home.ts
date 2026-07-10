@@ -384,7 +384,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       blocks.push(`<tr>
         <td class="mono">${heightLink(h.height)}</td>
         <td class="hash">${blockLink(hashHex, hashHex.slice(0, 10) + '…')}</td>
-        <td class="mono">${cb.block.transactions.length}</td>
+        <td class="mono">${cb.hasBody ? cb.block.transactions.length : '…'}</td>
         <td class="addr col-hide-sm">${addressLink(bytesToHex(h.miner))}</td>
         <td class="muted">${blockTime(h.timestamp)}</td>
       </tr>`);

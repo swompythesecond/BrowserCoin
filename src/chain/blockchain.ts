@@ -46,6 +46,15 @@ export interface ChainBlock {
    * non-tip block's state, both within the kept window.
    */
   state: State | null;
+  /**
+   * False for a header-only entry seeded by fast sync: `block.transactions` is
+   * an empty placeholder and `block.txRoot` does NOT match it — the real tx
+   * list arrives later via `attachBody`. Never serialize `block` or read its
+   * transactions while this is false. Bodyless entries still carry a complete,
+   * verified header, so fork choice, cumulative work, difficulty retargeting
+   * and MTP all work over them unchanged.
+   */
+  hasBody: boolean;
 }
 
 /**
@@ -86,6 +95,16 @@ export class Blockchain {
   private byHeight = new Map<number, string[]>();
   /** Heights below this have had their states pruned (monotonic). */
   private pruneFloor = 0;
+  /**
+   * Canonical-prefix entries whose tx bodies haven't been downloaded yet
+   * (fast-sync header seeds), height → hex hash. One entry per height: forks
+   * below the anchor are unrepresentable (their parent state is gone), so the
+   * bodyless prefix is a straight line. Emptied by `attachBody` as backfill
+   * progresses. Not touched by `pruneStates` — byHeight pruning doesn't apply.
+   */
+  private bodylessByHeight = new Map<number, string>();
+  /** Cached lower bound for lowestBodylessHeight(); advanced lazily. */
+  private bodylessLow = 0;
   /** Listeners invoked after a block is accepted (any branch). Hash-hex passed for keying. */
   private acceptListeners = new Set<(cb: ChainBlock) => void>();
   /** Listeners invoked only when the canonical tip moves, with the mempool delta. */
@@ -117,6 +136,7 @@ export class Blockchain {
       hash: genHash,
       work: blockWork(GENESIS.header.difficulty),
       state: emptyState(),
+      hasBody: true,
     });
     this.indexHeight(0, genHashHex);
     this.tipHash = genHashHex;
@@ -130,6 +150,8 @@ export class Blockchain {
     this.blocks.clear();
     this.byHeight.clear();
     this.pruneFloor = 0;
+    this.bodylessByHeight.clear();
+    this.bodylessLow = 0;
     this.initGenesis();
   }
 
@@ -341,7 +363,7 @@ export class Blockchain {
 
     // All good. Cache the block and update tip if this branch is now heaviest.
     const work = parent.work + blockWork(header.difficulty);
-    const accepted: ChainBlock = { block, hash, work, state: newState };
+    const accepted: ChainBlock = { block, hash, work, state: newState, hasBody: true };
     this.blocks.set(hashHex, accepted);
     this.indexHeight(header.height, hashHex);
 
@@ -436,7 +458,7 @@ export class Blockchain {
     if (!parent) return 'parent block unknown';
 
     const work = parent.work + blockWork(header.difficulty);
-    this.blocks.set(hashHex, { block, hash, work, state });
+    this.blocks.set(hashHex, { block, hash, work, state, hasBody: true });
     this.indexHeight(header.height, hashHex);
 
     if (state !== null) {
@@ -447,6 +469,99 @@ export class Blockchain {
       this.tipHash = hashHex;
     }
     return null;
+  }
+
+  /**
+   * Insert a header-only entry from fast sync. The caller has already verified
+   * the header (linkage, difficulty schedule, timestamps, sampled PoW) — this
+   * only wires it into the graph. Parent must exist (feed height-ascending from
+   * genesis). Never moves the tip (the tip must always have materialized state)
+   * and fires no listeners; bodies arrive later via `attachBody`.
+   */
+  seedHeader(header: BlockHeader): ValidationError | null {
+    return this.seedBodyless(header, null);
+  }
+
+  /**
+   * Insert the fast-sync anchor: a header-only entry that carries the verified
+   * snapshot state, forced to be the tip so the tail replays on top of it.
+   * The caller MUST have checked `stateRoot(state) === header.stateRoot` first.
+   */
+  seedAnchor(header: BlockHeader, state: State): ValidationError | null {
+    return this.seedBodyless(header, state);
+  }
+
+  private seedBodyless(header: BlockHeader, state: State | null): ValidationError | null {
+    const hash = hashHeader(header);
+    const hashHex = bytesToHex(hash);
+    if (this.blocks.has(hashHex)) return null; // idempotent
+
+    const parent = this.blocks.get(bytesToHex(header.prevHash));
+    if (!parent) return 'parent block unknown';
+    if (header.height !== parent.block.header.height + 1) return 'height not parent+1';
+
+    const work = parent.work + blockWork(header.difficulty);
+    this.blocks.set(hashHex, {
+      block: { header, transactions: [] },
+      hash,
+      work,
+      state,
+      hasBody: false,
+    });
+    this.indexHeight(header.height, hashHex);
+    this.bodylessByHeight.set(header.height, hashHex);
+    if (this.bodylessLow === 0 || header.height < this.bodylessLow) {
+      this.bodylessLow = header.height;
+    }
+    if (state !== null) this.tipHash = hashHex; // the designated anchor
+    return null;
+  }
+
+  /**
+   * Attach the real tx body to a header-only entry (background backfill). The
+   * body is bound to the already-verified header by `txRoot`, so tx signatures
+   * are not re-checked — same trust stance as `addValidatedBlock`: the network
+   * validated these txs when the block was first accepted, and a helper cannot
+   * substitute a different tx list without breaking the merkle root committed
+   * under PoW. No listeners fire; the caller persists to IDB itself.
+   */
+  attachBody(block: Block): ValidationError | null {
+    const hashHex = bytesToHex(hashHeader(block.header));
+    const entry = this.blocks.get(hashHex);
+    if (!entry) return 'unknown block';
+    if (entry.hasBody) return null; // idempotent
+    if (blockSize(block) > MAX_BLOCK_BYTES) return 'block too large';
+    const txRoot = computeTxRoot(block.transactions);
+    if (compareBytes(txRoot, block.header.txRoot) !== 0) return 'txRoot mismatch';
+
+    entry.block = block;
+    entry.hasBody = true;
+    this.bodylessByHeight.delete(block.header.height);
+    return null;
+  }
+
+  /** Number of canonical-prefix entries still missing their tx bodies. */
+  get bodylessCount(): number {
+    return this.bodylessByHeight.size;
+  }
+
+  /** True when every stored block has its tx body (the node is archival). */
+  get hasFullHistory(): boolean {
+    return this.bodylessByHeight.size === 0;
+  }
+
+  /**
+   * Smallest height still missing its body, or 0 when history is complete.
+   * Backfill pulls oldest-first, so the cached cursor advances monotonically;
+   * out-of-order attaches just cost a short forward scan.
+   */
+  lowestBodylessHeight(): number {
+    if (this.bodylessByHeight.size === 0) {
+      this.bodylessLow = 0;
+      return 0;
+    }
+    while (!this.bodylessByHeight.has(this.bodylessLow)) this.bodylessLow++;
+    return this.bodylessLow;
   }
 
   /**

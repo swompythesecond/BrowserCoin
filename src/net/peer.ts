@@ -3,7 +3,7 @@ import { CHAIN_ID } from '../chain/genesis.js';
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Blockchain } from '../chain/blockchain.js';
 import type { Block } from '../chain/block.js';
-import { decodeBlock, encodeBlock, hashHeader } from '../chain/block.js';
+import { decodeBlock, encodeBlock, encodeHeader, hashHeader } from '../chain/block.js';
 import type { Mempool } from '../chain/mempool.js';
 import { txHash, type Transaction } from '../chain/transaction.js';
 import type { ServerSync } from './serverSync.js';
@@ -834,7 +834,9 @@ export class PeerNetwork {
 
         case 'getBlock': {
           const target = this.chain.getBlock(msg.hash);
-          if (target) conn.send(encodeBlockMsg(target.block));
+          // Bodyless fast-sync entries can't be served — their tx list hasn't
+          // been backfilled yet and encoding the stub would corrupt the wire.
+          if (target && target.hasBody) conn.send(encodeBlockMsg(target.block));
           break;
         }
 
@@ -848,6 +850,7 @@ export class PeerNetwork {
           const collected: Block[] = [];
           for (const cb of this.chain.iterateCanonical()) {
             if (cb.block.header.height < fromHeight) break;
+            if (!cb.hasBody) break; // fast-sync prefix: bodies not downloaded yet
             collected.push(cb.block);
             if (collected.length >= max + 32) break; // small over-fetch then trim
           }
@@ -955,12 +958,31 @@ export class PeerNetwork {
           break;
         }
 
-        case 'getHeaders':
+        case 'getHeaders': {
+          // Range-serve canonical headers, height-ascending — the P2P mirror of
+          // the helper's GET /headers. Headers exist even for fast-sync prefix
+          // entries whose bodies haven't been backfilled, so this always serves.
+          const max = Math.max(1, Math.min(1024, msg.max | 0));
+          const fromHeight = Math.max(1, msg.fromHeight | 0); // genesis is hardcoded, never served
+          const collected: string[] = [];
+          for (const cb of this.chain.iterateCanonical()) {
+            const h = cb.block.header.height;
+            if (h < fromHeight) break;
+            if (h < fromHeight + max) collected.push(bytesToHex(encodeHeader(cb.block.header)));
+          }
+          if (collected.length > 0) {
+            collected.reverse();
+            conn.send({ t: 'headers', data: collected } satisfies ProtoMsg);
+          }
+          break;
+        }
+
         case 'headers':
         case 'invBlock':
-          // Future work: implement light-header sync. Orphan-pool backfill
-          // above handles arbitrary-depth divergence already — slower than a
-          // batched header sync, but correct.
+          // Future work: consume light-header sync over P2P (HTTP is the
+          // fast-sync transport today). Orphan-pool backfill above handles
+          // arbitrary-depth divergence already — slower than a batched header
+          // sync, but correct.
           break;
       }
     } catch (e) {

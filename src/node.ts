@@ -9,6 +9,9 @@ import { type KeyPair } from './crypto/keys.js';
 import { MinerController } from './miner/controller.js';
 import { PeerNetwork } from './net/peer.js';
 import { ServerSync } from './net/serverSync.js';
+import { HistoryBackfill, type BackfillStatus } from './net/backfill.js';
+import type { FastSyncPersistData } from './net/fastSync.js';
+import { getExplorerIndex } from './ui/explorerIndex.js';
 import { loadServerLists, saveServerLists, type ServerLists } from './net/servers.js';
 import { BROWSERCOIN_NETWORK } from './net/network.js';
 import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
@@ -23,7 +26,7 @@ import {
   type LockRow,
 } from './chain/state.js';
 import { blockReward, COIN, SNAPSHOT_DEPTH } from './chain/genesis.js';
-import { decodeBlock, encodeBlock, hashHeader, type Block } from './chain/block.js';
+import { HEADER_LEN, decodeBlock, decodeHeader, encodeBlock, hashHeader, type Block } from './chain/block.js';
 import { bytesToHex, hexToBytes, compareBytes } from './util/binary.js';
 import { ActivityIndex } from './ui/activityIndex.js';
 import {
@@ -53,6 +56,22 @@ interface StateSnapshot {
   finalizedHashHex: string;
   accounts: StateRow[]; // state AFTER the finalized block
   locks?: LockRow[];    // script locks live at the finalized block (omitted pre-fork / old snapshots)
+}
+
+/**
+ * Persisted header prefix from a fast sync: the verified headers for heights
+ * 1..anchorHeight, so a reload can rebuild the header-only chain without
+ * re-downloading. Deleted once history backfill completes (the tab then holds
+ * every full block and restores via the ordinary snapshot path). Lives next to
+ * `stateSnapshot` in the meta store (no DB schema bump).
+ */
+interface HeaderChainMeta {
+  v: 1;
+  chainVersion: string;
+  anchorHeight: number;
+  anchorHashHex: string;
+  /** encodeHeader() of heights 1..anchorHeight, concatenated (148 B each). */
+  bytes: Uint8Array;
 }
 
 /**
@@ -96,7 +115,13 @@ export interface SyncStatus {
   /** Our local chain height. */
   localHeight: number;
   /** Phase label for the UI. */
-  phase: 'restoring' | 'connecting' | 'fetching' | 'verifying' | 'ready' | 'offline';
+  phase: 'restoring' | 'connecting' | 'fetching' | 'verifying' | 'headers' | 'snapshot' | 'ready' | 'offline';
+  /**
+   * Fine-grained progress for the fast-sync phases ('headers' | 'snapshot'),
+   * where `localHeight` doesn't move (the chain stays at genesis until the
+   * verified anchor is seeded in one step). Undefined elsewhere.
+   */
+  aux?: { done: number; total: number };
   /**
    * True once we've waited long enough that the overlay should offer the user a
    * manual "Continue offline" escape hatch. Normal connections never see this —
@@ -143,6 +168,9 @@ export class Node {
   private walletListeners = new Set<ChainListener>();
   private syncListeners = new Set<(s: SyncStatus) => void>();
   private blockMinedListeners = new Set<(info: MinedBlockInfo) => void>();
+  private backfillListeners = new Set<(s: BackfillStatus) => void>();
+  /** Background history backfill after a fast sync (null until started). */
+  private backfill: HistoryBackfill | null = null;
   /** Debounce handle + last-written height for the persisted state snapshot. */
   private snapshotTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSnapshotHeight = -1;
@@ -210,6 +238,7 @@ export class Node {
     this.chain.onSnapshotInvalidated(() => {
       console.warn('[node] block references pruned state (reorg deeper than snapshot window?); clearing snapshot');
       void delMeta('stateSnapshot');
+      void delMeta('headerChain'); // a fast-synced prefix anchors on the same snapshot
       this.lastSnapshotHeight = -1;
     });
 
@@ -284,11 +313,39 @@ export class Node {
 
       // getAllBlocksOrdered uses the height index, so blocks arrive ascending.
       const stored = await getAllBlocksOrdered();
+      const snap = await getMeta<StateSnapshot>('stateSnapshot');
+      const snapValid = !!snap && snap.v === 1 && snap.chainVersion === CHAIN_VERSION && snap.finalizedHeight > 0;
+
+      // A fast-synced tab persisted its verified header prefix — restore it
+      // (with any already-backfilled real blocks layered in) even when the
+      // blocks store alone can't reach the anchor. Deleted once backfill
+      // completes, after which the ordinary snapshot path below takes over.
+      const headerChain = await getMeta<HeaderChainMeta>('headerChain');
+      if (
+        headerChain && headerChain.v === 1 && headerChain.chainVersion === CHAIN_VERSION &&
+        snapValid && snap.finalizedHeight === headerChain.anchorHeight && snap.finalizedHashHex === headerChain.anchorHashHex
+      ) {
+        try {
+          await this.replayWithHeaderChain(stored, headerChain, snap);
+          this.activityIndex.rebuild(this.wallet.address, this.chain.iterateCanonical());
+          if (this.chain.height > 0) {
+            console.log(`[node] restored to tip h=${this.chain.height} (header-chain fast-path)`);
+            this.emitChain();
+          }
+          return;
+        } catch (e) {
+          console.warn('[node] header-chain restore failed; discarding fast-sync state:', (e as Error).message);
+          this.chain.reset();
+          void delMeta('headerChain');
+          void delMeta('stateSnapshot');
+          // Fall through to the ordinary paths over whatever full blocks exist.
+        }
+      }
+
       if (stored.length === 0) return;
 
       let usedSnapshot = false;
-      const snap = await getMeta<StateSnapshot>('stateSnapshot');
-      if (snap && snap.v === 1 && snap.chainVersion === CHAIN_VERSION && snap.finalizedHeight > 0) {
+      if (snapValid) {
         try {
           await this.replayWithSnapshot(stored, snap);
           usedSnapshot = true;
@@ -381,6 +438,59 @@ export class Node {
   }
 
   /**
+   * Restore a fast-synced tab: rebuild the header-only prefix from the
+   * persisted header blob, preferring a stored REAL block at each height (from
+   * partial backfill or the tail), verify the anchor state against its header's
+   * stateRoot, then replay stored tail blocks above the anchor. Throws on any
+   * inconsistency so the caller can discard the fast-sync state entirely.
+   */
+  private async replayWithHeaderChain(
+    stored: StoredBlock[],
+    hc: HeaderChainMeta,
+    snap: StateSnapshot,
+  ): Promise<void> {
+    const bytes = hc.bytes;
+    if (!(bytes instanceof Uint8Array) || bytes.length !== hc.anchorHeight * HEADER_LEN) {
+      throw new Error('header blob length mismatch');
+    }
+    const anchorState = deserializeState(snap.accounts, snap.locks ?? []);
+    const byHash = new Map<string, StoredBlock>();
+    for (const row of stored) byHash.set(row.hash, row);
+
+    for (let i = 0; i < hc.anchorHeight; i++) {
+      const header = decodeHeader(bytes, i * HEADER_LEN);
+      if (header.height !== i + 1) throw new Error(`header blob height sequence broken at ${i}`);
+      const hashHex = bytesToHex(hashHeader(header));
+      const isAnchor = header.height === hc.anchorHeight;
+      const row = byHash.get(hashHex);
+
+      if (isAnchor) {
+        if (hashHex !== hc.anchorHashHex) throw new Error('anchor hash mismatch');
+        if (compareBytes(stateRoot(anchorState), header.stateRoot) !== 0) {
+          throw new Error('snapshot stateRoot mismatch');
+        }
+        const err = row
+          ? this.chain.seedHistoricalBlock(decodeBlock(row.encoded), anchorState)
+          : this.chain.seedAnchor(header, anchorState);
+        if (err) throw new Error(`seed anchor: ${err}`);
+      } else {
+        const err = row
+          ? this.chain.seedHistoricalBlock(decodeBlock(row.encoded), null)
+          : this.chain.seedHeader(header);
+        if (err) throw new Error(`seed h=${header.height}: ${err}`);
+      }
+    }
+
+    // Tail above the anchor: ordinary validated replay (parents materialized).
+    for (const row of stored) {
+      if (row.height <= hc.anchorHeight) continue;
+      const block = decodeBlock(row.encoded);
+      const err = await this.chain.addValidatedBlock(block);
+      if (err) throw new Error(`tail h=${row.height}: ${err}`);
+    }
+  }
+
+  /**
    * Debounced refresh of the persisted state snapshot. Called on every canonical
    * tip move; coalesces bursts (e.g. a sync catch-up) into a single write a few
    * seconds after the chain settles.
@@ -453,6 +563,33 @@ export class Node {
       () => this.miner.getStatus().running,
       () => this.refreshServerListsFromDiscovery(),
     );
+    // Fast sync (headers + verified snapshot) reports progress through the
+    // sync overlay and persists its verified state for instant reloads.
+    this.serverSync.setFastSyncHooks({
+      onProgress: (p) => {
+        this.emitSync({ syncing: true, phase: p.phase, aux: { done: p.done, total: p.total } });
+      },
+      persist: async (data: FastSyncPersistData) => {
+        const headerChain: HeaderChainMeta = {
+          v: 1,
+          chainVersion: CHAIN_VERSION,
+          anchorHeight: data.anchorHeight,
+          anchorHashHex: data.anchorHashHex,
+          bytes: data.headerBytes,
+        };
+        const snap: StateSnapshot = {
+          v: 1,
+          chainVersion: CHAIN_VERSION,
+          finalizedHeight: data.anchorHeight,
+          finalizedHashHex: data.anchorHashHex,
+          accounts: data.accounts,
+          locks: data.locks,
+        };
+        await putMeta('headerChain', headerChain);
+        await putMeta('stateSnapshot', snap);
+        this.lastSnapshotHeight = data.anchorHeight;
+      },
+    });
     this.serverSync.onStatus((s) => {
       if (s.reachable > 0 && s.serverHeight > this.syncStatus.targetHeight) {
         this.emitSync({ targetHeight: s.serverHeight });
@@ -513,7 +650,10 @@ export class Node {
       // is the key fix: even if we already dropped the overlay during the
       // heartbeat-before-tip race (server marked reachable while its serverHeight
       // was still 0), learning a far-ahead tip now puts the overlay back up.
-      this.emitSync({ syncing: true, phase: 'verifying' });
+      // Fast-sync phases own the overlay while they run — don't clobber their
+      // label with 'verifying' (their backlog is huge by design).
+      const inFastSync = this.syncStatus.phase === 'headers' || this.syncStatus.phase === 'snapshot';
+      this.emitSync({ syncing: true, phase: inFastSync ? this.syncStatus.phase : 'verifying' });
       return;
     }
     if (!this.syncStatus.syncing) return; // within threshold and already caught up
@@ -525,12 +665,87 @@ export class Node {
     // we never expose a height-0 cached chain during the connect window. If no
     // one ever answers, target stays 0 and the 12s safety net handles it.
     if (target > 0 && (serverUp || peerUp)) {
-      this.emitSync({ syncing: false, phase: 'ready' });
+      this.emitSync({ syncing: false, phase: 'ready', aux: undefined });
+      // Fast-synced (or reloaded mid-backfill) tabs still miss historical tx
+      // bodies — start/resume the background backfill now that we're caught up.
+      this.maybeStartBackfill();
     } else if (serverUp || peerUp) {
       this.emitSync({ phase: 'fetching' });
     } else {
       this.emitSync({ phase: 'connecting' });
     }
+  }
+
+  /** Begin background history backfill if the chain has a bodyless prefix. */
+  private maybeStartBackfill(): void {
+    if (this.backfill || !this.serverSync) return;
+    if (this.chain.bodylessCount === 0) return;
+    const sync = this.serverSync;
+    this.backfill = new HistoryBackfill({
+      chain: this.chain,
+      servers: () => sync.getApiServers(),
+      fetchImpl: (url) => sync.fetchWithTimeout(url),
+      verifier: sync.verifierPool(),
+      persistBlock: (hashHex, height, encoded) => putBlock(hashHex, height, encoded),
+      onProgress: (s) => this.emitBackfill(s),
+      onComplete: async () => {
+        // The tab is archival now — the ordinary block-store restore covers
+        // reloads, so the header blob is dead weight.
+        await delMeta('headerChain').catch(() => {});
+        // Prefix bodies attached outside the tip-event stream: rebuild the
+        // wallet history and flag the explorer index for its lazy rebuild.
+        this.activityIndex.rebuild(this.wallet.address, this.chain.iterateCanonical());
+        getExplorerIndex(this.chain).markStale();
+        console.log('[node] history backfill complete — full block history available');
+        this.emitBackfill(this.backfill!.getStatus());
+        this.emitChain();
+      },
+      onFatal: (reason) => {
+        console.error('[node] fast-sync prefix failed full verification:', reason);
+        void this.discardChainAndResync();
+      },
+    });
+    this.backfill.start();
+    this.emitBackfill(this.backfill.getStatus());
+  }
+
+  getBackfillStatus(): BackfillStatus {
+    if (this.backfill) return this.backfill.getStatus();
+    const missing = this.chain.bodylessCount;
+    return { total: missing, remaining: missing, running: false };
+  }
+
+  onBackfill(fn: (s: BackfillStatus) => void): () => void {
+    this.backfillListeners.add(fn);
+    return () => this.backfillListeners.delete(fn);
+  }
+
+  private emitBackfill(s: BackfillStatus): void {
+    for (const fn of this.backfillListeners) fn(s);
+  }
+
+  /**
+   * Nuclear option, reached only when the background PoW sweep proves the
+   * fast-synced prefix forged (a helper fed us a chain that survived sampled
+   * verification): stop mining, wipe every local artifact, and re-sync from
+   * genesis through the normal fully-validating path. Fast sync stays off for
+   * the rest of the session (ServerSync only ever tries it once).
+   */
+  private async discardChainAndResync(): Promise<void> {
+    this.miner.stop();
+    this.backfill?.stop();
+    this.backfill = null;
+    try {
+      await clearAll();
+      await putMeta('chainVersion', CHAIN_VERSION);
+    } catch (e) {
+      console.warn('[node] idb wipe failed:', (e as Error).message);
+    }
+    this.lastSnapshotHeight = -1;
+    this.chain.reset();
+    this.emitSync({ syncing: true, phase: 'fetching', aux: undefined });
+    this.emitChain();
+    this.serverSync?.kick();
   }
 
   /**

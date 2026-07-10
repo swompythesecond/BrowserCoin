@@ -149,6 +149,8 @@ interface BlockRow {
   totalFees: bigint;
   difficulty: number;
   txs: Transaction[];
+  /** False while the block's tx body hasn't been backfilled yet (fast sync). */
+  hasBody: boolean;
 }
 
 function renderBlocksView(container: HTMLElement, node: Node): SubView {
@@ -200,13 +202,17 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
         ts: h.timestamp,
         totalFees: fees,
         difficulty: h.difficulty,
-        txs: cb.block.transactions,
+        txs: cb.hasBody ? cb.block.transactions : [],
+        hasBody: cb.hasBody,
       });
     }
     return out;
   }
 
   function renderTxDetail(b: BlockRow): string {
+    if (!b.hasBody) {
+      return `<div class="muted text-sm" style="font-style:italic;">Transactions not downloaded yet — history is still syncing in the background.</div>`;
+    }
     if (b.txs.length === 0) {
       return `<div class="muted text-sm" style="font-style:italic;">Coinbase only (block reward).</div>`;
     }
@@ -238,7 +244,7 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
         const detail = expanded.has(b.height)
           ? `<tr><td colspan="7" style="background: var(--surface); padding: 0;">
               <div style="padding: 12px 16px;">
-                <div class="label-caps" style="margin-bottom:8px;">${b.txs.length} transaction${b.txs.length === 1 ? '' : 's'}</div>
+                <div class="label-caps" style="margin-bottom:8px;">${b.hasBody ? `${b.txs.length} transaction${b.txs.length === 1 ? '' : 's'}` : 'transactions pending download'}</div>
                 ${renderTxDetail(b)}
               </div>
             </td></tr>`
@@ -246,9 +252,9 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
         return `<tr data-block="${b.height}" style="cursor:pointer;">
           <td class="mono">${heightLink(b.height)}</td>
           <td>${blockLink(b.hashHex)}</td>
-          <td class="mono">${b.txs.length}</td>
+          <td class="mono">${b.hasBody ? b.txs.length : '…'}</td>
           <td class="col-hide-sm">${addressLink(b.minerHex)}</td>
-          <td class="mono muted col-hide-sm">${formatAmount(b.totalFees)}</td>
+          <td class="mono muted col-hide-sm">${b.hasBody ? formatAmount(b.totalFees) : '…'}</td>
           <td class="mono muted col-hide-sm" title="0x${b.difficulty.toString(16).padStart(8, '0')}">${difficultyBits(b.difficulty)} bits</td>
           <td class="muted">${new Date(b.ts * 1000).toLocaleTimeString()}</td>
         </tr>${detail}`;
