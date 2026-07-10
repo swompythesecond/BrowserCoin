@@ -56,6 +56,16 @@ export class HistoryBackfill {
   private stopped = false;
   private started = false;
   private total = 0;
+  /**
+   * Heights whose PoW verification returned false once. Fatal only on the
+   * SECOND failure of the same height, in a later batch: a single `false` can
+   * still be environmental (the verifier pool resolves false after exhausting
+   * retries, e.g. under sustained memory pressure from the miner), and the
+   * fatal path wipes the user's whole local chain — never do that on one
+   * ambiguous signal. A genuinely forged header fails deterministically, so
+   * the second look costs one extra round.
+   */
+  private powSuspects = new Set<number>();
 
   constructor(private deps: BackfillDeps) {}
 
@@ -88,7 +98,14 @@ export class HistoryBackfill {
     let dryRounds = 0;
 
     while (!this.stopped && chain.bodylessCount > 0) {
-      const attached = await this.oneBatch();
+      let attached = 0;
+      try {
+        attached = await this.oneBatch();
+      } catch (e) {
+        // Never let one bad batch kill the loop — backfill must survive
+        // anything short of an explicit fatal signal.
+        console.warn('[backfill] batch failed:', (e as Error).message);
+      }
       if (this.stopped) return;
       if (attached < 0) return; // fatal — onFatal already fired
       if (attached > 0) {
@@ -102,7 +119,11 @@ export class HistoryBackfill {
 
     if (!this.stopped && chain.bodylessCount === 0) {
       this.deps.onProgress?.(this.getStatus());
-      await this.deps.onComplete?.();
+      try {
+        await this.deps.onComplete?.();
+      } catch (e) {
+        console.warn('[backfill] onComplete failed:', (e as Error).message);
+      }
     }
   }
 
@@ -125,6 +146,15 @@ export class HistoryBackfill {
     // The background PoW sweep: every historical block Argon2id-verified once.
     const powResults = await this.deps.verifier.verifyAll(decoded);
 
+    // If NOTHING in the batch verified, the verifier itself is unhealthy
+    // (e.g. every Argon2id allocation rejected under memory pressure) — a
+    // forged chain wouldn't fail uniformly alongside a functioning pool.
+    // Treat it as a dry round and retry later instead of counting strikes.
+    if (decoded.length > 0 && !powResults.some(Boolean)) {
+      console.warn('[backfill] entire batch failed PoW verification — verifier pool unhealthy, retrying later');
+      return 0;
+    }
+
     let attached = 0;
     for (let i = 0; i < decoded.length; i++) {
       if (this.stopped) return attached;
@@ -135,11 +165,22 @@ export class HistoryBackfill {
       if (entry.hasBody) continue;
 
       if (!powResults[i]) {
-        // This hash IS a header we seeded — its PoW being invalid means the
-        // fast-synced prefix was forged past the sampled verification.
-        this.deps.onFatal?.(`seeded header at h=${block.header.height} failed full PoW verification`);
-        return -1;
+        // This hash IS a header we seeded — invalid PoW would mean the
+        // fast-synced prefix was forged past the sampled verification. But a
+        // single false can also be the verifier pool giving up under memory
+        // pressure, so require the SAME height to fail again in a later batch
+        // before pulling the (chain-wiping) fatal cord. The block stays
+        // bodyless, so lowestBodylessHeight() naturally re-pulls it.
+        const h = block.header.height;
+        if (this.powSuspects.has(h)) {
+          this.deps.onFatal?.(`seeded header at h=${h} failed full PoW verification twice`);
+          return -1;
+        }
+        this.powSuspects.add(h);
+        console.warn(`[backfill] PoW verify failed at h=${h} — re-checking next round before acting`);
+        continue;
       }
+      this.powSuspects.delete(block.header.height); // cleared on a clean pass
 
       const err = chain.attachBody(block);
       if (err) {

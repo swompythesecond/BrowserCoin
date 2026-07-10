@@ -101,7 +101,7 @@ describe('HistoryBackfill', () => {
     expect(backfill.getStatus().running).toBe(false);
   });
 
-  it('fires onFatal when a seeded header fails the full PoW sweep', async () => {
+  it('fires onFatal only when the same header fails the PoW sweep twice', async () => {
     const { chain, blocks } = buildSeededChain();
     let fatal = '';
 
@@ -109,7 +109,7 @@ describe('HistoryBackfill', () => {
       chain,
       servers: () => ['http://helper'],
       fetchImpl: blocksEndpoint(blocks),
-      // Block at index 2 (height 3) fails Argon2id → forged-prefix signal.
+      // Height 3 fails Argon2id deterministically → forged-prefix signal.
       verifier: { verifyAll: async (bs) => bs.map((b) => b.header.height !== 3) },
       persistBlock: async () => {},
       onFatal: (reason) => { fatal = reason; },
@@ -119,8 +119,31 @@ describe('HistoryBackfill', () => {
     await waitFor(() => fatal !== '');
 
     expect(fatal).toMatch(/h=3/);
-    // Heights 1-2 were attached before the fatal block; 3-5 never were.
-    expect(chain.bodylessCount).toBe(3);
+    expect(fatal).toMatch(/twice/);
+    // Round 1: h=3 becomes a suspect (strike one), everything else attaches.
+    // Round 2 re-pulls from h=3, it fails again → fatal. Only h=3 is bodyless.
+    expect(chain.bodylessCount).toBe(1);
+    expect(chain.lowestBodylessHeight()).toBe(3);
+  });
+
+  it('treats an all-failed batch as an unhealthy verifier, not a forged chain', async () => {
+    const { chain, blocks } = buildSeededChain();
+    const backfill = new HistoryBackfill({
+      chain,
+      servers: () => ['http://helper'],
+      fetchImpl: blocksEndpoint(blocks),
+      // Everything fails — the signature of memory-pressure allocation
+      // failures, which must never trigger the chain-wiping fatal path.
+      verifier: { verifyAll: async (bs) => bs.map(() => false) },
+      persistBlock: async () => {},
+      onFatal: () => { throw new Error('must not be fatal'); },
+      idleMs: 1,
+    });
+    backfill.start();
+    await new Promise((r) => setTimeout(r, 50));
+    backfill.stop();
+
+    expect(chain.bodylessCount).toBe(HEIGHTS); // nothing attached, nothing wiped
   });
 
   it('ignores blocks that are not part of the seeded chain and keeps retrying', async () => {

@@ -12,19 +12,46 @@ import { compactToTarget } from '../util/binary.js';
 
 type PendingResolve = (ok: boolean) => void;
 
-interface Pending {
-  id: number;
+interface Job {
+  block: Block;
   resolve: PendingResolve;
+  /** Dispatch attempts so far — see MAX_ATTEMPTS. */
+  attempts: number;
+}
+
+interface InFlight {
+  id: number;
+  job: Job;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class VerifierPool {
   private workers: Worker[] = [];
   private idle: Worker[] = [];
-  private queue: Array<{ block: Block; resolve: PendingResolve }> = [];
-  private pending = new Map<number, Pending>();
+  private queue: Job[] = [];
+  /** One in-flight job per busy worker. */
+  private busy = new Map<Worker, InFlight>();
   private nextId = 1;
   private size: number;
   private started = false;
+
+  /**
+   * A worker that hasn't answered in this long is presumed wedged: retire it,
+   * respawn, and re-dispatch its job to another worker. Argon2id verification
+   * is ~40-125 ms uncontended and seconds under heavy mining contention, so a
+   * minute of silence is a genuine stall, not slowness. Without this, one
+   * browser-killed worker left its promise unsettled forever — hanging every
+   * verifyAll() that included it (which froze history backfill at 0%).
+   */
+  private static readonly JOB_TIMEOUT_MS = 60_000;
+  /**
+   * How many times a job is dispatched before the pool gives up and resolves
+   * `false`. Retries cover transient failures (a WASM allocation rejected
+   * under memory pressure, a worker crash); three attempts across respawned
+   * workers make it overwhelmingly likely a persistent `false` is a real
+   * verdict rather than an environmental hiccup.
+   */
+  private static readonly MAX_ATTEMPTS = 3;
 
   constructor(size: number) {
     this.size = clampCores(size);
@@ -32,16 +59,43 @@ export class VerifierPool {
 
   private spawnWorker(): Worker {
     const w = new Worker(new URL('./verifier.worker.ts', import.meta.url), { type: 'module' });
-    w.onmessage = (e: MessageEvent<{ id: number; ok: boolean }>) => {
-      const p = this.pending.get(e.data.id);
-      if (p) {
-        this.pending.delete(e.data.id);
-        p.resolve(e.data.ok);
+    w.onmessage = (e: MessageEvent<{ id: number; ok?: boolean; err?: true }>) => {
+      const entry = this.busy.get(w);
+      if (entry && entry.id === e.data.id) {
+        clearTimeout(entry.timer);
+        this.busy.delete(w);
+        if (e.data.err) this.retryOrFail(entry.job); // couldn't verify — not a verdict
+        else entry.job.resolve(e.data.ok === true);
       }
       this.releaseWorker(w);
     };
+    // A worker that dies hard (browser OOM-kill, script error) never posts a
+    // result — reclaim its job and replace it instead of hanging the batch.
+    w.onerror = () => this.failWorker(w);
     this.workers.push(w);
     return w;
+  }
+
+  /** Retire a wedged/dead worker, requeue its job, and backfill the pool. */
+  private failWorker(w: Worker): void {
+    const entry = this.busy.get(w);
+    if (entry) {
+      clearTimeout(entry.timer);
+      this.busy.delete(w);
+    }
+    this.retire(w);
+    if (entry) this.retryOrFail(entry.job);
+    if (this.started && this.workers.length < this.size) {
+      this.releaseWorker(this.spawnWorker()); // picks up queued work immediately
+    }
+  }
+
+  private retryOrFail(job: Job): void {
+    if (job.attempts >= VerifierPool.MAX_ATTEMPTS) {
+      job.resolve(false);
+      return;
+    }
+    this.queue.push(job);
   }
 
   private ensureStarted(): void {
@@ -80,9 +134,10 @@ export class VerifierPool {
   }
 
   private releaseWorker(w: Worker): void {
+    if (!this.workers.includes(w)) return; // already retired (failWorker raced a late message)
     const next = this.queue.shift();
     if (next) {
-      this.dispatch(w, next.block, next.resolve);
+      this.dispatch(w, next);
     } else if (this.workers.length > this.size) {
       // Pool was downsized while this worker was busy; retire it now that the
       // queue is drained rather than parking it back in the idle set.
@@ -92,21 +147,24 @@ export class VerifierPool {
     }
   }
 
-  private dispatch(w: Worker, block: Block, resolve: PendingResolve): void {
+  private dispatch(w: Worker, job: Job): void {
     const id = this.nextId++;
-    this.pending.set(id, { id, resolve });
-    const target = compactToTarget(block.header.difficulty);
+    job.attempts++;
+    const timer = setTimeout(() => this.failWorker(w), VerifierPool.JOB_TIMEOUT_MS);
+    this.busy.set(w, { id, job, timer });
+    const target = compactToTarget(job.block.header.difficulty);
     const targetHex = target.toString(16).padStart(64, '0');
-    w.postMessage({ id, headerBytes: encodeHeader(block.header), targetHex });
+    w.postMessage({ id, headerBytes: encodeHeader(job.block.header), targetHex });
   }
 
   /** Verify one block's PoW off-thread. */
   verify(block: Block): Promise<boolean> {
     this.ensureStarted();
     return new Promise<boolean>((resolve) => {
+      const job: Job = { block, resolve, attempts: 0 };
       const w = this.idle.pop();
-      if (w) this.dispatch(w, block, resolve);
-      else this.queue.push({ block, resolve });
+      if (w) this.dispatch(w, job);
+      else this.queue.push(job);
     });
   }
 
@@ -121,11 +179,12 @@ export class VerifierPool {
 
   /** Tear down workers. Tests + page-close. */
   terminate(): void {
+    for (const entry of this.busy.values()) clearTimeout(entry.timer);
     for (const w of this.workers) w.terminate();
     this.workers = [];
     this.idle = [];
     this.queue = [];
-    this.pending.clear();
+    this.busy.clear();
     this.started = false;
   }
 }
