@@ -490,9 +490,14 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
         };
       }
     } else if (sessionElapsedSec > 300 && s.hashesPerSecond > 0 && avg < 0.5 * s.hashesPerSecond) {
+      // Note: this signature (avg ≪ live) means there were stretches of NOT
+      // hashing at the current speed — it cannot be caused by stale templates
+      // (hashes on a stale template still count toward the rate). The usual
+      // causes are a backgrounded tab / sleeping laptop, or the user raising
+      // threads/CPU mid-session, all of which are harmless after the fact.
       hint = {
         cls: 'conn-strip warn',
-        html: `<span class="dot"></span> Session average is far below the live rate — workers may be wasting cycles on stale templates.`,
+        html: `<span class="dot"></span> Session average is well below the live rate — usually the tab spent time in the background (or the laptop slept), or CPU/threads were raised mid-session. If the live rate looks right, nothing is being wasted now.`,
       };
     }
     if (hint) {
