@@ -135,6 +135,7 @@ browser-native consensus can go.
 Build wallets, block explorers, or bots against any BrowserCoin helper server. The HTTP API is fully open (CORS `*`, no auth) and the wire format is documented end-to-end.
 
 - 📘 **[`docs/developers.md`](docs/developers.md)** — REST endpoints, block/tx binary format, PoW parameters, signing rules, P2P protocol.
+- 📜 **[`docs/scripting.md`](docs/scripting.md)** — the Script language: execution model, full opcode reference, and the common templates (hash locks, HTLC atomic swaps, multisig, time-locked vaults).
 - 🛠️ **[`examples/send-tx.mjs`](examples/send-tx.mjs)** — runnable Node script that generates a key, signs a transaction, and submits it.
 
 ## Caveats

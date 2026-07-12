@@ -388,6 +388,8 @@ Neither helper is an authority. Every block they accept is validated by the loca
 
 Two transaction kinds extend the base Transfer with programmable spend conditions: a **Lock** sends coins into a script-guarded output, and a **Redeem** spends it by satisfying that script. This is BrowserCoin's "programmable money" layer — hash locks, time locks, multisig, escrow. Source: `src/chain/transaction.ts`, `src/chain/script.ts`, `src/chain/state.ts`.
 
+> This section covers the **transaction wire formats** that carry scripts. For the Script **language itself** — execution model, the full opcode reference, and worked templates with stack walks — see the dedicated [`scripting.md`](scripting.md) guide.
+
 ### 11.1 Activation
 
 Script txs are a **time-gated rule extension on the same chain** — they do not reset balances or history. A Lock or Redeem is only valid in a block whose **median-time-past** (BIP113-style, computed from the chain itself, not a wall clock) has reached `FORK1_ACTIVATION_TIME` (`src/chain/genesis.ts`, unix seconds). Before activation both kinds are rejected (`lock tx before fork activation` / `redeem tx before fork activation`), so upgraded and non-upgraded nodes agree until the date, then flip together. The gate is `scriptsActiveForMtp` in `src/chain/fork.ts`.
