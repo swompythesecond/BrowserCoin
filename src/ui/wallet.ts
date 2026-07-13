@@ -1,5 +1,7 @@
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
+import { MIN_FEE_PER_BYTE } from '../chain/genesis.js';
+import { TX_ENCODED_LEN } from '../chain/transaction.js';
 import { hexToBytes } from '../util/binary.js';
 import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, filterActivity, renderActivityRows, type ActivityFilter } from './activity.js';
@@ -9,6 +11,9 @@ import { renderAddressQr } from './qr.js';
 import { openScanner } from './qrScanner.js';
 
 const PAGE_SIZE = 25;
+
+/** Lowest fee the mempool accepts for a transfer (1 wei/byte × fixed 152-byte encoding). */
+const MIN_TRANSFER_FEE = formatAmount(MIN_FEE_PER_BYTE * BigInt(TX_ENCODED_LEN));
 
 const FILTERS: Array<{ key: ActivityFilter; label: string }> = [
   { key: 'all',       label: 'All' },
@@ -64,6 +69,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
             <input data-w="fee" value="0.00001" />
           </div>
         </div>
+        <div class="text-sm muted mt-sm">Minimum fee: ${MIN_TRANSFER_FEE} ${TICKER}</div>
         <div class="row mt-md">
           <button data-w="send">Send</button>
           <span data-w="msg" class="text-sm muted"></span>
@@ -104,7 +110,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     title: 'Send',
     info: {
       title: 'Sending coins',
-      body: `Paste any BrowserCoin address to send to it. The fee is a tip that helps miners include your transaction faster.\n\nOnce sent, the transaction is broadcast to the network and waits in the mempool until a miner picks it up.`,
+      body: `Paste any BrowserCoin address to send to it. The fee is a tip that helps miners include your transaction faster. The network requires at least ${MIN_TRANSFER_FEE} ${TICKER} — anything lower is rejected as spam.\n\nOnce sent, the transaction is broadcast to the network and waits in the mempool until a miner picks it up.`,
     },
   }));
   slot('activity', cardHeader({
