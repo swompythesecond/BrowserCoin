@@ -47,6 +47,13 @@ const HIGHLIGHTS: Highlight[] = [
       'A faucet that drips free BRC to new addresses, so you can try sending and receiving before you have mined anything.',
     url: 'https://freebrowsercoins.uc.r.appspot.com/',
   },
+  {
+    title: 'BRC Dice',
+    tag: 'On-chain game',
+    description:
+      'A SatoshiDice-inspired dice game played directly on the chain — send BRC to a game address to place a bet, and provably fair rolls pay winners straight back to their wallet.',
+    url: 'https://brcdice.duckdns.org/',
+  },
 ];
 
 function hostname(url: string): string {
