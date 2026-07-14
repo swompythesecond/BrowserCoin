@@ -46,10 +46,11 @@ import { noteFailure, noteSuccess, readJsonCapped } from './apiFanout.js';
 import { BROWSERCOIN_NETWORK } from './network.js';
 
 /**
- * Only fast-sync when the backlog is worth it — below this, the normal
- * block-by-block sync finishes in a minute or two anyway. Doubles as the cap
- * on the LOCAL height: a tab that already holds a real prefix keeps using the
- * normal path (its IDB restore made it non-fresh).
+ * Only fast-sync when the backlog is worth it. Within this many blocks of the
+ * tip, replaying the tail as full blocks is cheaper than re-pulling every
+ * header plus a snapshot, so the normal block-by-block path wins. Beyond it we
+ * always fast-sync — including a tab resuming a large partial chain, which
+ * otherwise ground through a slow full-verify of the whole gap.
  */
 export const FAST_SYNC_MIN_BACKLOG = 2000;
 /** Headers per /headers request: 4000 × 148 B ≈ 592 KB raw (~1.2 MB hex). */
@@ -118,7 +119,14 @@ interface SnapshotWire {
 }
 
 export function fastSyncEligible(localHeight: number, serverHeight: number): boolean {
-  return localHeight < FAST_SYNC_MIN_BACKLOG && serverHeight - localHeight > FAST_SYNC_MIN_BACKLOG;
+  // Gate purely on the backlog — how far behind the tip we are — not on the
+  // local height. A tab resuming a big partial chain (e.g. interrupted at
+  // 12k with the tip at 28k) is exactly the case that most needs the fast
+  // path; the old `localHeight < FAST_SYNC_MIN_BACKLOG` clause locked it out
+  // and forced a slow full-verify of the whole gap. Seeding is idempotent by
+  // block hash, so running fast sync over an existing prefix is safe: blocks
+  // we already hold become no-ops and only the missing gap is seeded.
+  return serverHeight - localHeight > FAST_SYNC_MIN_BACKLOG;
 }
 
 export async function attemptFastSync(

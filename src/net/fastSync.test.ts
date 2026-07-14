@@ -26,6 +26,7 @@ import { BROWSERCOIN_NETWORK } from './network.js';
 import {
   FAST_SYNC_MIN_BACKLOG,
   attemptFastSync,
+  fastSyncEligible,
   type FastSyncDeps,
   type FastSyncPersistData,
 } from './fastSync.js';
@@ -157,11 +158,23 @@ describe('attemptFastSync', () => {
     expect(persisted!.headerBytes.length).toBe(ANCHOR * HEADER_LEN);
   });
 
-  it('is skipped when the backlog is too small or the tab is not fresh', async () => {
+  it('is skipped when the backlog is too small', async () => {
     const fx = buildFixture();
     const deps = makeDeps(fx, makeFetch(fx));
     expect(await attemptFastSync(deps, { height: 100, tipHash: fx.tipHashHex }))
       .toEqual({ status: 'skipped' });
+  });
+
+  it('gates on backlog only, not local height', () => {
+    const big = FAST_SYNC_MIN_BACKLOG + 1;
+    // Fresh tab, deep backlog → eligible.
+    expect(fastSyncEligible(0, big)).toBe(true);
+    // Non-fresh tab resuming a large partial chain → still eligible (the case
+    // the old `localHeight < FAST_SYNC_MIN_BACKLOG` clause wrongly locked out).
+    expect(fastSyncEligible(12290, 12290 + big)).toBe(true);
+    // Within the threshold of the tip → skip, whatever the local height.
+    expect(fastSyncEligible(0, FAST_SYNC_MIN_BACKLOG)).toBe(false);
+    expect(fastSyncEligible(50000, 50000 + FAST_SYNC_MIN_BACKLOG)).toBe(false);
   });
 
   it('reports unsupported when every server 404s the endpoints', async () => {
