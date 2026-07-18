@@ -94,6 +94,10 @@ export const CHAIN_VERSION = BROWSERCOIN_NETWORK;
  */
 const SYNC_BACKLOG_BLOCKS = 50;
 
+/** fastSyncNote shown while a deep backlog syncs with zero reachable helpers. */
+const HELPERS_UNREACHABLE_NOTE =
+  'Helper servers unreachable from this device — pulling blocks from peers instead, which is much slower.';
+
 type ChainListener = () => void;
 
 /** Detail of a locally-mined block — what the UI's "you found a block!" toast needs. */
@@ -122,6 +126,13 @@ export interface SyncStatus {
    * verified anchor is seeded in one step). Undefined elsewhere.
    */
   aux?: { done: number; total: number };
+  /**
+   * Human-readable explanation when the tab is NOT fast-syncing a deep backlog
+   * (attempt failed, helpers too old, helpers unreachable). Undefined while
+   * fast sync is working or unneeded. Exists so the sync overlay can say WHY
+   * a sync is slow — phones have no devtools console to read the logs.
+   */
+  fastSyncNote?: string;
   /**
    * True once we've waited long enough that the overlay should offer the user a
    * manual "Continue offline" escape hatch. Normal connections never see this —
@@ -589,6 +600,14 @@ export class Node {
         await putMeta('stateSnapshot', snap);
         this.lastSnapshotHeight = data.anchorHeight;
       },
+      onOutcome: (o) => {
+        const note = o.status === 'ok'
+          ? undefined
+          : o.status === 'unsupported'
+            ? 'Fast sync unavailable: the helper servers don’t serve headers/snapshots — verifying every block instead.'
+            : `Fast sync attempt ${o.attempt} failed (${o.reason})${o.willRetry ? ' — retrying…' : ' — verifying every block instead.'}`;
+        this.emitSync({ fastSyncNote: note });
+      },
     });
     this.serverSync.onStatus((s) => {
       if (s.reachable > 0 && s.serverHeight > this.syncStatus.targetHeight) {
@@ -653,7 +672,16 @@ export class Node {
       // Fast-sync phases own the overlay while they run — don't clobber their
       // label with 'verifying' (their backlog is huge by design).
       const inFastSync = this.syncStatus.phase === 'headers' || this.syncStatus.phase === 'snapshot';
-      this.emitSync({ syncing: true, phase: inFastSync ? this.syncStatus.phase : 'verifying' });
+      // No reachable helper = fast sync can never even start (it needs their
+      // /headers + /snapshot); the backlog is grinding in over P2P. Say so.
+      // Only touch the note when it's ours — an attempt-failure note from
+      // onOutcome is more specific and must not be overwritten.
+      const serverUp = (this.serverSync?.getStatus().reachable ?? 0) > 0;
+      const cur = this.syncStatus.fastSyncNote;
+      const note = !serverUp && (cur === undefined || cur === HELPERS_UNREACHABLE_NOTE)
+        ? HELPERS_UNREACHABLE_NOTE
+        : serverUp && cur === HELPERS_UNREACHABLE_NOTE ? undefined : cur;
+      this.emitSync({ syncing: true, phase: inFastSync ? this.syncStatus.phase : 'verifying', fastSyncNote: note });
       return;
     }
     if (!this.syncStatus.syncing) return; // within threshold and already caught up

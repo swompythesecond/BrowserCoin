@@ -38,6 +38,17 @@ const REQUEST_TIMEOUT_MS = 8_000;
 const FAST_SYNC_FETCH_TIMEOUT_MS = 30_000;
 /** Fast-sync attempts per session before falling back to full sync for good. */
 const FAST_SYNC_MAX_ATTEMPTS = 3;
+
+/** What a fast-sync attempt did — surfaced to the UI via setFastSyncHooks. */
+export interface FastSyncOutcome {
+  status: 'ok' | 'unsupported' | 'failed';
+  /** Failure reason from attemptFastSync (status 'failed' only). */
+  reason?: string;
+  /** 1-based attempt number this session. */
+  attempt: number;
+  /** True when another attempt will run on an upcoming sync tick. */
+  willRetry: boolean;
+}
 const HELPER_RECORDS_PER_API_SOURCE = 50;
 const MAX_HELPER_RECORDS_PER_PULL = 200;
 /**
@@ -150,6 +161,12 @@ export class ServerSync {
   private fastSyncHooks: {
     onProgress?: (p: FastSyncProgress) => void;
     persist?: (data: FastSyncPersistData) => Promise<void>;
+    /**
+     * Fired once per attempt with what happened. Lets the UI say WHY a tab is
+     * grinding through a full sync instead of fast-syncing — a mobile user
+     * can't open the devtools console to read the warn logs.
+     */
+    onOutcome?: (o: FastSyncOutcome) => void;
   } = {};
 
   /** Node injects UI-progress + IDB-persistence callbacks for fast sync. */
@@ -510,6 +527,7 @@ export class ServerSync {
         if (res.status === 'ok') {
           this.fastSyncDone = true;
           console.log(`[serverSync] fast sync: verified anchor at h=${res.anchorHeight}; pulling tail`);
+          this.fastSyncHooks.onOutcome?.({ status: 'ok', attempt: this.fastSyncAttempts, willRetry: false });
           // The anchor is finalized-depth below the tip, so no reorg overlap
           // is needed — and overlapping would just hit hash-dedup on the
           // bodyless prefix. The chain changed regardless of the tail
@@ -519,8 +537,10 @@ export class ServerSync {
         } else if (res.status === 'unsupported') {
           this.fastSyncDone = true;
           console.log('[serverSync] fast sync unsupported by configured servers; full sync');
+          this.fastSyncHooks.onOutcome?.({ status: 'unsupported', attempt: this.fastSyncAttempts, willRetry: false });
         } else if (res.status === 'failed') {
           const retry = res.retryable && this.fastSyncAttempts < FAST_SYNC_MAX_ATTEMPTS;
+          this.fastSyncHooks.onOutcome?.({ status: 'failed', reason: res.reason, attempt: this.fastSyncAttempts, willRetry: retry });
           if (retry) {
             // Skip the block-by-block pull this tick: it would hold `inFlight`
             // for ages and starve the retry. The next poll tick (seconds away)
