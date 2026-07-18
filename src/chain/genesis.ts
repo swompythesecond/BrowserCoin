@@ -170,3 +170,34 @@ export const GENESIS_TIMESTAMP = GENESIS.header.timestamp;
  * Announced switch date: 2026-07-05 16:00:00 UTC.
  */
 export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
+
+// ─── Fork #2: Sandglass v3 proof-of-work ────────────────────────────────────
+//
+// Swaps the PoW hash from Argon2id (32 MB, GPU-dominated) to Sandglass v3
+// (memory-latency-bound, browser-competitive) at a fixed HEIGHT. Same chain,
+// same balances, same history — blocks below the fork keep verifying with
+// Argon2id; blocks at/after it use Sandglass. See src/crypto/sandglass.ts.
+//
+// Why HEIGHT-gated, not time-gated like fork #1: the PoW verifier worker is
+// stateless (it only receives the header bytes, never the surrounding chain),
+// so it cannot compute median-time-past. Height is in the header's first 4
+// bytes — deterministic, in-band, and not manipulable by a single miner — so
+// the algorithm choice is unambiguous for every verifier. Coordination for the
+// "refresh your tab" flag-day is by announcing the height ≈ its expected date;
+// clients auto-update on page load, and at the fork height the network flips
+// together (un-refreshed tabs reject the first Sandglass block and stall until
+// reloaded — same UX as fork #1's date flip).
+//
+// TODO(deploy): set these three to real values just before shipping.
+//   1. FORK_HEIGHT — pick current tip + enough lead (~575 blocks/day) for
+//      users to refresh. Announce the height and its estimated date.
+//   2. ANCHOR_TIMESTAMP — the estimated unix time the chain reaches FORK_HEIGHT.
+//      Used only as the ASERT re-anchor point; a rough estimate is fine (ASERT
+//      absorbs a small offset within a halflife).
+//   3. ANCHOR_ATTEMPTS — expected hash attempts per block right after the fork
+//      = (honest Sandglass hashrate in H/s) × TARGET_BLOCK_TIME_S. Determines
+//      the reset difficulty. ERR LOW (easier): too-easy self-corrects in
+//      minutes as ASERT ramps difficulty up; too-hard risks a slow-block stall.
+export const SANDGLASS_FORK_HEIGHT = 40_000; // PLACEHOLDER — set at deploy
+export const SANDGLASS_ANCHOR_TIMESTAMP = 1786000000; // PLACEHOLDER — est. time of FORK_HEIGHT
+export const SANDGLASS_ANCHOR_ATTEMPTS = 128_000; // PLACEHOLDER — ~850 H/s × 150 s

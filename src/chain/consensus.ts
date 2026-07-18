@@ -8,6 +8,9 @@ import {
   HALFLIFE_S,
   MAX_TARGET,
   MTP_WINDOW,
+  SANDGLASS_ANCHOR_ATTEMPTS,
+  SANDGLASS_ANCHOR_TIMESTAMP,
+  SANDGLASS_FORK_HEIGHT,
   TARGET_BLOCK_TIME_S,
 } from './genesis.js';
 
@@ -21,6 +24,16 @@ const FLOOR_TARGET = compactToTarget(GENESIS_DIFFICULTY_COMPACT);
 
 /** ASERT anchor target — bigint cache of GENESIS's target. */
 const ANCHOR_TARGET = compactToTarget(GENESIS_DIFFICULTY_COMPACT);
+
+/**
+ * Fork #2 (Sandglass) difficulty reset. Switching the PoW algorithm changes the
+ * network's attempts-per-second, so the Argon2id-era difficulty would be wrong
+ * for Sandglass — the first Sandglass block resets to this anchor and ASERT
+ * re-anchors here (see nextDifficulty). Derived from the expected attempts/block
+ * so it's a canonical compact; chain-work = 2^256/target ≈ attempts.
+ */
+const SANDGLASS_ANCHOR_TARGET = (1n << 256n) / BigInt(SANDGLASS_ANCHOR_ATTEMPTS);
+export const SANDGLASS_ANCHOR_DIFFICULTY_COMPACT = targetToCompact(SANDGLASS_ANCHOR_TARGET);
 
 /**
  * BCH aserti3-2d implementation. Computes the next-block target as
@@ -37,16 +50,22 @@ const ANCHOR_TARGET = compactToTarget(GENESIS_DIFFICULTY_COMPACT);
  *   `heightDiff` is (parent.height − anchor.height + 1), i.e. the count
  *   of blocks the chain *should* have produced by candidate time.
  */
-function asertTarget(parentHeight: number, parentTime: number): bigint {
-  // anchor.height = 0 (genesis). heightDiff is the number of *intervals*
-  // between anchor and parent, NOT (parent.height − anchor.height + 1).
-  // BCH's reference implementation uses parent.height − anchor.height
-  // (with a pprev-time adjustment to absorb the off-by-one). Anchoring
-  // directly at genesis we don't have a pprev, so the natural form is
-  // heightDiff = parent.height. At exact target pace this gives
-  // deviation = 0 → target unchanged → equilibrium is a fixed point.
-  const heightDiff = BigInt(parentHeight);
-  const timeDiff = BigInt(parentTime - GENESIS_TIMESTAMP);
+function asertTarget(
+  parentHeight: number,
+  parentTime: number,
+  anchorHeight: number,
+  anchorTime: number,
+  anchorTarget: bigint,
+): bigint {
+  // heightDiff is the number of *intervals* between anchor and parent, NOT
+  // (parent.height − anchor.height + 1). BCH's reference uses
+  // parent.height − anchor.height (with a pprev-time adjustment to absorb the
+  // off-by-one). Anchoring directly at a block (genesis, or the fork block for
+  // fork #2) we don't have a pprev, so the natural form is
+  // heightDiff = parent.height − anchor.height. At exact target pace this gives
+  // deviation = 0 → target unchanged → equilibrium is a fixed point at the anchor.
+  const heightDiff = BigInt(parentHeight - anchorHeight);
+  const timeDiff = BigInt(parentTime - anchorTime);
   // exponent = ((timeDiff − heightDiff × target_spacing) << 16) / halflife
   const numerator = (timeDiff - heightDiff * BigInt(TARGET_BLOCK_TIME_S)) << 16n;
   const exponent = numerator / BigInt(HALFLIFE_S);
@@ -72,7 +91,7 @@ function asertTarget(parentHeight: number, parentTime: number): bigint {
       (1n << 47n)) >>
       48n);
 
-  let target = ANCHOR_TARGET * factor;
+  let target = anchorTarget * factor;
   if (shifts < 0n) target = target >> -shifts;
   else target = target << shifts;
   target = target >> 16n; // remove the fixed-point shift
@@ -131,6 +150,14 @@ export function nextDifficulty(
   candidateTimestamp?: number,
 ): number {
   if (nextHeight === 0) return GENESIS_DIFFICULTY_COMPACT;
+
+  // Fork #2: hard difficulty reset at the first Sandglass block. Unconditional
+  // (bypasses the emergency-drop / ASERT below) so the algorithm switch starts
+  // from a known difficulty matched to expected honest Sandglass hashrate. A
+  // reset without the re-anchor below would be snapped straight back by the
+  // genesis-anchored schedule, so both are required together.
+  if (nextHeight === SANDGLASS_FORK_HEIGHT) return SANDGLASS_ANCHOR_DIFFICULTY_COMPACT;
+
   const prev = previousHeaders[previousHeaders.length - 1]!;
   const prevTarget = compactToTarget(prev.difficulty);
 
@@ -153,8 +180,15 @@ export function nextDifficulty(
     }
   }
 
-  // ASERT against the hardcoded genesis anchor.
-  return targetToCompact(asertTarget(prev.height, prev.timestamp));
+  // ASERT. Pre-fork blocks anchor at genesis; fork-#2 blocks anchor at the fork
+  // block (hardcoded height/time/target constants, so the anchor never needs to
+  // be fetched from the recent-header window).
+  if (nextHeight > SANDGLASS_FORK_HEIGHT) {
+    return targetToCompact(
+      asertTarget(prev.height, prev.timestamp, SANDGLASS_FORK_HEIGHT, SANDGLASS_ANCHOR_TIMESTAMP, SANDGLASS_ANCHOR_TARGET),
+    );
+  }
+  return targetToCompact(asertTarget(prev.height, prev.timestamp, 0, GENESIS_TIMESTAMP, ANCHOR_TARGET));
 }
 
 /**
