@@ -100,7 +100,15 @@ export type FastSyncResult =
   | { status: 'ok'; anchorHeight: number }
   | { status: 'skipped' }
   | { status: 'unsupported' }
-  | { status: 'failed'; reason: string };
+  /**
+   * `retryable` separates transient trouble (fetch timeouts on a flaky mobile
+   * connection, a snapshot mid-rebuild, helpers disagreeing during a reorg)
+   * from hard verification failures (broken linkage, bad PoW, bad state root)
+   * where the served data itself is wrong and retrying would just re-download
+   * the same poison. Callers may re-attempt retryable failures; a hard failure
+   * should fall back to full sync for the session.
+   */
+  | { status: 'failed'; reason: string; retryable: boolean };
 
 interface HeadersWire {
   v: number;
@@ -148,7 +156,7 @@ export async function attemptFastSync(
   while (cursor <= target) {
     const batch = await fetchHeadersBatch(deps, unsupported, cursor, Math.min(HEADERS_BATCH, target - cursor + 1));
     if (batch === 'unsupported') return { status: 'unsupported' };
-    if (batch === null) return { status: 'failed', reason: 'headers fetch failed on every server' };
+    if (batch === null) return { status: 'failed', reason: 'headers fetch failed on every server', retryable: true };
     if (batch.count === 0) break; // server has fewer blocks than the /tip we saw
     const buf = hexToBytes(batch.headers);
     for (let off = 0; off + HEADER_LEN <= buf.length; off += HEADER_LEN) {
@@ -160,7 +168,7 @@ export async function attemptFastSync(
   }
   // Allow a slightly-shrunk server chain (tiny reorg mid-pull), nothing bigger.
   if (headers.length < target - 64) {
-    return { status: 'failed', reason: `expected ~${target} headers, got ${headers.length}` };
+    return { status: 'failed', reason: `expected ~${target} headers, got ${headers.length}`, retryable: true };
   }
   const topHeight = headers.length;
 
@@ -174,19 +182,19 @@ export async function attemptFastSync(
   const now = Math.floor(Date.now() / 1000);
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i]!;
-    if (h.height !== i + 1) return { status: 'failed', reason: `height sequence broken at index ${i}` };
+    if (h.height !== i + 1) return { status: 'failed', reason: `height sequence broken at index ${i}`, retryable: false };
     if (compareBytes(h.prevHash, prevHash) !== 0) {
-      return { status: 'failed', reason: `header linkage broken at height ${h.height}` };
+      return { status: 'failed', reason: `header linkage broken at height ${h.height}`, retryable: false };
     }
     if (h.difficulty !== nextDifficulty(h.height, window, h.timestamp)) {
-      return { status: 'failed', reason: `difficulty schedule violated at height ${h.height}` };
+      return { status: 'failed', reason: `difficulty schedule violated at height ${h.height}`, retryable: false };
     }
     const mtp = medianTimePast(window);
     if (mtp > 0 && h.timestamp <= mtp) {
-      return { status: 'failed', reason: `timestamp below median-time-past at height ${h.height}` };
+      return { status: 'failed', reason: `timestamp below median-time-past at height ${h.height}`, retryable: false };
     }
     if (h.timestamp > now + MAX_FUTURE_TIME_S) {
-      return { status: 'failed', reason: `timestamp too far in future at height ${h.height}` };
+      return { status: 'failed', reason: `timestamp too far in future at height ${h.height}`, retryable: false };
     }
     prevHash = hashHeader(h);
     hashes.push(prevHash);
@@ -219,7 +227,7 @@ export async function attemptFastSync(
       } catch { /* unreachable server — not a vote */ }
     }));
     if (responses >= 2 && confirming < 2) {
-      return { status: 'failed', reason: 'tip cross-check failed (helpers disagree with fetched chain)' };
+      return { status: 'failed', reason: 'tip cross-check failed (helpers disagree with fetched chain)', retryable: true };
     }
   }
 
@@ -227,7 +235,7 @@ export async function attemptFastSync(
   deps.onProgress?.({ phase: 'snapshot', done: 0, total: 1 });
   const snap = await fetchSnapshot(deps, unsupported, headers, hashes, topHeight);
   if (snap === 'unsupported') return { status: 'unsupported' };
-  if (snap === null) return { status: 'failed', reason: 'no server produced a verifiable snapshot' };
+  if (snap === null) return { status: 'failed', reason: 'no server produced a verifiable snapshot', retryable: true };
   const anchorIdx = snap.height - 1;
 
   // ── 5. Sampled Argon2id PoW: recent window ending at the anchor + randoms. ─
@@ -243,7 +251,7 @@ export async function attemptFastSync(
   const powBlocks: Block[] = [...powIdxs].map((i) => ({ header: headers[i]!, transactions: [] }));
   const powResults = await deps.verifier.verifyAll(powBlocks);
   if (powResults.some((ok) => !ok)) {
-    return { status: 'failed', reason: 'sampled PoW verification failed' };
+    return { status: 'failed', reason: 'sampled PoW verification failed', retryable: false };
   }
 
   // ── 6. Seed the chain: headers below the anchor, the anchor with state. ────
@@ -255,13 +263,13 @@ export async function attemptFastSync(
     const err = deps.chain.seedHeader(headers[i]!);
     if (err) {
       deps.chain.reset();
-      return { status: 'failed', reason: `seed h=${i + 1}: ${err}` };
+      return { status: 'failed', reason: `seed h=${i + 1}: ${err}`, retryable: false };
     }
   }
   const anchorErr = deps.chain.seedAnchor(headers[anchorIdx]!, state);
   if (anchorErr) {
     deps.chain.reset();
-    return { status: 'failed', reason: `seed anchor: ${anchorErr}` };
+    return { status: 'failed', reason: `seed anchor: ${anchorErr}`, retryable: false };
   }
 
   // ── 7. Persist for instant restore on reload (best-effort). ────────────────

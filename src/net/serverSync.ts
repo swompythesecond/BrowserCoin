@@ -27,6 +27,17 @@ import { helperRecordHash, type HelperRecord } from './helperRecords.js';
 const PUSH_BATCH = 50;
 const PULL_BATCH = 100;
 const REQUEST_TIMEOUT_MS = 8_000;
+/**
+ * Time-to-first-byte budget for fast-sync's bulk pulls (/headers, /snapshot).
+ * These responses are orders of magnitude bigger than a /tip poke and helpers
+ * may assemble them on demand, so the 8 s default aborted them on slow mobile
+ * connections — which then (before retries existed) latched the tab into full
+ * sync. The timeout only covers time-to-response-headers; body streaming is
+ * unbounded either way.
+ */
+const FAST_SYNC_FETCH_TIMEOUT_MS = 30_000;
+/** Fast-sync attempts per session before falling back to full sync for good. */
+const FAST_SYNC_MAX_ATTEMPTS = 3;
 const HELPER_RECORDS_PER_API_SOURCE = 50;
 const MAX_HELPER_RECORDS_PER_PULL = 200;
 /**
@@ -127,10 +138,15 @@ export class ServerSync {
   private verifier: VerifierPool | null = null;
 
   /**
-   * Fast sync runs at most once per session: on failure the normal full sync
-   * takes over, and retrying a failed/poisoned fast path would just burn time.
+   * Fast sync gets a few tries before the session falls back to full sync for
+   * good. A single transient hiccup (a fetch timeout on a flaky phone
+   * connection, a helper mid-snapshot-rebuild) used to latch the fallback
+   * permanently and condemn the tab to grinding through the whole backlog
+   * block by block. Hard verification failures still latch immediately —
+   * retrying poisoned data would re-download the same poison.
    */
-  private fastSyncTried = false;
+  private fastSyncAttempts = 0;
+  private fastSyncDone = false;
   private fastSyncHooks: {
     onProgress?: (p: FastSyncProgress) => void;
     persist?: (data: FastSyncPersistData) => Promise<void>;
@@ -431,7 +447,7 @@ export class ServerSync {
   }
 
   /** Fetch with the per-request timeout. Public: fastSync + backfill reuse it. */
-  async fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+  async fetchWithTimeout(url: string, init?: RequestInit, timeoutMs = this.requestTimeoutMs): Promise<Response> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -439,7 +455,7 @@ export class ServerSync {
         timer = setTimeout(() => {
           controller.abort();
           reject(new Error('request timeout'));
-        }, this.requestTimeoutMs);
+        }, timeoutMs);
       });
       return await Promise.race([
         fetch(url, { ...init, signal: controller.signal }),
@@ -470,17 +486,21 @@ export class ServerSync {
       // entire bulk catchup, then it snaps to ready with no progress shown.
       this.emit();
 
-      // Fresh tab, deep backlog → try the headers+snapshot fast path once. On
-      // success the chain jumps to a verified anchor ~SNAPSHOT_DEPTH below the
-      // tip and the tail is pulled as full blocks right below; any non-ok
-      // outcome (old servers, verification failure) falls through to the
-      // normal full sync unchanged.
-      if (!this.fastSyncTried && fastSyncEligible(this.chain.height, tip.height)) {
-        this.fastSyncTried = true;
+      // Deep backlog → try the headers+snapshot fast path. On success the
+      // chain jumps to a verified anchor ~SNAPSHOT_DEPTH below the tip and the
+      // tail is pulled as full blocks right below; a hard failure (old
+      // servers, verification failure) falls through to the normal full sync.
+      // A transient failure retries on the next few sync ticks first — see
+      // fastSyncAttempts.
+      if (!this.fastSyncDone && fastSyncEligible(this.chain.height, tip.height)) {
+        this.fastSyncAttempts++;
         const res = await attemptFastSync({
           chain: this.chain,
           servers: this.apiServers,
-          fetchImpl: (url) => this.fetchWithTimeout(url),
+          // Bulk pulls (up to ~1.2 MB of headers per request, a multi-MB
+          // snapshot) get a longer time-to-first-byte budget than the 8 s
+          // health-check default — mobile connections regularly need it.
+          fetchImpl: (url) => this.fetchWithTimeout(url, undefined, FAST_SYNC_FETCH_TIMEOUT_MS),
           // Thunked so the worker pool is only spun up if fast sync actually
           // reaches its PoW-sampling step (not on the unsupported/404 path).
           verifier: { verifyAll: (blocks) => this.getVerifier().verifyAll(blocks) },
@@ -488,6 +508,7 @@ export class ServerSync {
           persist: this.fastSyncHooks.persist,
         }, tip);
         if (res.status === 'ok') {
+          this.fastSyncDone = true;
           console.log(`[serverSync] fast sync: verified anchor at h=${res.anchorHeight}; pulling tail`);
           // The anchor is finalized-depth below the tip, so no reorg overlap
           // is needed — and overlapping would just hit hash-dedup on the
@@ -496,9 +517,21 @@ export class ServerSync {
           await this.pullFrom(res.anchorHeight + 1);
           this.onUpdate();
         } else if (res.status === 'unsupported') {
+          this.fastSyncDone = true;
           console.log('[serverSync] fast sync unsupported by configured servers; full sync');
         } else if (res.status === 'failed') {
+          const retry = res.retryable && this.fastSyncAttempts < FAST_SYNC_MAX_ATTEMPTS;
+          if (retry) {
+            // Skip the block-by-block pull this tick: it would hold `inFlight`
+            // for ages and starve the retry. The next poll tick (seconds away)
+            // re-attempts; P2P gossip still makes progress meanwhile.
+            console.warn(`[serverSync] fast sync failed (attempt ${this.fastSyncAttempts}/${FAST_SYNC_MAX_ATTEMPTS}, retrying next tick):`, res.reason);
+            return;
+          }
+          this.fastSyncDone = true;
           console.warn('[serverSync] fast sync failed, falling back to full sync:', res.reason);
+        } else {
+          this.fastSyncDone = true; // 'skipped' — backlog gone, nothing to retry
         }
       }
 
