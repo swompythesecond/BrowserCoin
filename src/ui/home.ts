@@ -5,7 +5,7 @@ import { bytesToHex, compactToTarget } from '../util/binary.js';
 import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
 import { cardHeader, infoButton } from './info.js';
-import { forkCountdown, forkActivationDateUTC } from './forkStatus.js';
+import { sandglassCountdown, sandglassActivationDateUTC } from './forkStatus.js';
 import { addressLink, blockLink, heightLink } from './explorerShared.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
@@ -458,8 +458,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     }
   }
 
-  // --- Script hard-fork countdown banner (dismissible, persists) ---
-  const FORK_BANNER_KEY = 'browsercoin:fork-banner-dismissed';
+  // --- Sandglass PoW hard-fork countdown banner (fork #2; dismissible) ---
+  const FORK_BANNER_KEY = 'browsercoin:sandglass-banner-dismissed';
   let forkTimer: ReturnType<typeof setInterval> | undefined;
   const forkBanner = view.querySelector<HTMLElement>('[data-w="forkBanner"]');
   const forkBannerText = view.querySelector<HTMLElement>('[data-w="forkBannerText"]');
@@ -468,14 +468,14 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   })();
   if (forkBanner && forkBannerText && !alreadyDismissed) {
     view.querySelector('[data-slot="forkInfo"]')?.appendChild(infoButton({
-      title: 'The script upgrade',
-      body: `BrowserCoin is adding scripts — programmable spend conditions like hash-locked payments, the building block for atomic swaps and escrow.\n\nIt's a coordinated rule change on the SAME chain: your balance, history and mining are untouched. At the switch time the network flips automatically, driven by the chain's own clock (median-time-past), so every up-to-date tab activates at the same block.\n\nAll you need to do is keep this tab refreshed before the date — non-updated tabs will fork off when scripts go live.`,
+      title: 'The mining upgrade (Sandglass)',
+      body: `BrowserCoin is switching its mining algorithm from Argon2id to Sandglass — a memory-latency-hard proof-of-work tuned so a browser tab is competitive with GPUs again (GPU farms had taken over Argon2id).\n\nIt's a coordinated rule change on the SAME chain: your balance, history and coins are completely untouched. Only the mining puzzle changes, and only for blocks at/after the fork height — everything before it stays valid.\n\nAll you need to do is keep this tab refreshed before the switch — up-to-date tabs flip to Sandglass together at the fork block; non-updated tabs fork off until you reload.`,
     }));
     const updateForkBanner = (): void => {
-      const cd = forkCountdown();
+      const cd = sandglassCountdown(node.chain.height);
       forkBannerText.innerHTML = cd.activated
-        ? `<b>Scripts are LIVE</b> on the network.`
-        : `<b>Script hard-fork incoming.</b> ${cd.line} <span class="muted">(${forkActivationDateUTC()})</span>. Keep this tab refreshed so you flip with the network.`;
+        ? `<b>Sandglass mining is LIVE.</b> Your browser is now competitive with GPUs again.`
+        : `<b>New mining algorithm incoming (Sandglass v3).</b> ${cd.line} <span class="muted">(~${sandglassActivationDateUTC()})</span>. Keep this tab refreshed so you flip with the network.`;
     };
     updateForkBanner();
     forkBanner.hidden = false;

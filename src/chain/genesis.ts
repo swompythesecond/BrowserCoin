@@ -170,3 +170,65 @@ export const GENESIS_TIMESTAMP = GENESIS.header.timestamp;
  * Announced switch date: 2026-07-05 16:00:00 UTC.
  */
 export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
+
+// ─── Fork #2: Sandglass v3 proof-of-work ────────────────────────────────────
+//
+// Swaps the PoW hash from Argon2id (32 MB, GPU-dominated) to Sandglass v3
+// (memory-latency-bound, browser-competitive) at a fixed HEIGHT. Same chain,
+// same balances, same history — blocks below the fork keep verifying with
+// Argon2id; blocks at/after it use Sandglass. See src/crypto/sandglass.ts.
+//
+// Why HEIGHT-gated, not time-gated like fork #1: the PoW verifier worker is
+// stateless (it only receives the header bytes, never the surrounding chain),
+// so it cannot compute median-time-past. Height is in the header's first 4
+// bytes — deterministic, in-band, and not manipulable by a single miner — so
+// the algorithm choice is unambiguous for every verifier. Coordination for the
+// "refresh your tab" flag-day is by announcing the height ≈ its expected date;
+// clients auto-update on page load, and at the fork height the network flips
+// together (un-refreshed tabs reject the first Sandglass block and stall until
+// reloaded — same UX as fork #1's date flip).
+//
+// TODO(deploy): set these three to real values just before shipping.
+//   1. FORK_HEIGHT — pick current tip + enough lead (~575 blocks/day) for
+//      users to refresh. Announce the height and its estimated date.
+//   2. ANCHOR_TIMESTAMP — the estimated unix time the chain reaches FORK_HEIGHT.
+//      Used only as the ASERT re-anchor point; a rough estimate is fine (ASERT
+//      absorbs a small offset within a halflife).
+//   3. ANCHOR_ATTEMPTS — expected hash attempts per block right after the fork
+//      = (honest Sandglass hashrate in H/s) × TARGET_BLOCK_TIME_S. Determines
+//      the reset difficulty. ERR LOW (easier): too-easy self-corrects in
+//      minutes as ASERT ramps difficulty up; too-hard risks a slow-block stall.
+// Announced activation (community vote): 2026-07-22 14:00 CEST (= 12:00 UTC).
+// Height-gated at SANDGLASS_FORK_HEIGHT (the real trigger); the date/time is the
+// estimate of when the chain reaches it (~576 blocks/day). Set from mainnet
+// height 32,024 on 2026-07-19 20:18 UTC + ~1,526 blocks of lead. DEPLOY THE
+// FRONTEND WELL BEFORE this height so tabs auto-update and flip together.
+export const SANDGLASS_FORK_HEIGHT = 33_550;
+
+// ASERT re-anchor point for the reset (see consensus.ts). ≈ the estimated time
+// the chain reaches SANDGLASS_FORK_HEIGHT. Set to 2026-07-22 12:00 UTC (14:00 CEST).
+//
+// ⚠️ Only a SOFT estimate because of the safety band below. The raw ASERT
+// re-anchor is asymmetric and dangerous: if the chain reaches the fork height
+// EARLIER than this timestamp, difficulty explodes and the whole network stalls
+// (and can't self-heal); LATER is benign (a floor-difficulty burst). The clamp
+// neutralizes both tails during the settling window, so an estimate off by hours
+// is safe. If the chain is visibly ahead of schedule as the fork nears, biasing
+// this a few hours EARLIER costs nothing (a small benign burst).
+export const SANDGLASS_ANCHOR_TIMESTAMP = 1784721600;
+
+// After the fork, the ASERT re-anchor difficulty is clamped to within 4× of the
+// reset (each direction) for this many blocks, so a wrong anchor-timestamp
+// estimate can neither stall the chain nor cause an instant-block storm while the
+// timestamp offset drains out. ~2000 blocks ≈ 3.5 days — far longer than any
+// plausible transient. See nextDifficulty in consensus.ts.
+export const SANDGLASS_ANCHOR_CLAMP_BLOCKS = 2000;
+
+// ⚠️ VERIFY BEFORE DEPLOY. Expected hash ATTEMPTS per block right after the fork
+// = (honest Sandglass hashrate in H/s) × 150. This sets the reset difficulty.
+// The GPU farms leave at the fork (Sandglass kills their edge), so the post-fork
+// network is browsers/CPUs — a MUCH lower, unknown hashrate. ERR LOW (easier):
+// too-easy just means a brief spell of fast blocks that ASERT ramps up out of
+// within ~10-30 min; too-hard risks a slow-block stall. 5,000,000 ≈ ~33 kH/s of
+// honest miners; raise it if you expect more, lower it if fewer.
+export const SANDGLASS_ANCHOR_ATTEMPTS = 5_000_000;

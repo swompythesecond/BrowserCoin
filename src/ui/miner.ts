@@ -2,7 +2,7 @@ import { maxMinerWorkers } from '../miner/controller.js';
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
 import { nextDifficulty } from '../chain/consensus.js';
-import { DIFFICULTY_WINDOW, MTP_WINDOW, blockReward } from '../chain/genesis.js';
+import { DIFFICULTY_WINDOW, MTP_WINDOW, SANDGLASS_FORK_HEIGHT, blockReward } from '../chain/genesis.js';
 import { compactToTarget } from '../util/binary.js';
 import { bytesToHex } from '../util/binary.js';
 import { TICKER } from '../brand.js';
@@ -535,7 +535,10 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     const bits = target <= 0n ? 256 : 256 - target.toString(2).length;
     const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;
     diffEl.textContent = `${bits} bits`;
-    diffSubEl.textContent = `~${formatBig(expected)} hashes/block`;
+    // PoW algorithm for the block being mined — flips at the fork height so the
+    // Argon2id → Sandglass transition is visible live.
+    const algo = nextHeight >= SANDGLASS_FORK_HEIGHT ? 'Sandglass' : 'Argon2id';
+    diffSubEl.textContent = `~${formatBig(expected)} hashes/block · ${algo}`;
 
     if (s.running && s.hashesPerSecond > 0 && expected > 0n) {
       const seconds = Number(expected / BigInt(Math.max(1, Math.floor(s.hashesPerSecond))));
