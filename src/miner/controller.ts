@@ -491,6 +491,10 @@ export class MinerController {
         { type: 'module' },
       );
       w.onmessage = (e: MessageEvent<WorkerOut>) => this.onWorker(idx, e.data);
+      // Without these, a worker that fails to load its module dies SILENTLY —
+      // no hashing, no error. Surface it (fires only on an actual failure).
+      w.onerror = (e) => console.error(`[miner] worker ${idx} failed to load/run:`, e.message, e.filename, e.lineno);
+      w.onmessageerror = (e) => console.error(`[miner] worker ${idx} messageerror:`, e);
       this.workers.push(w);
     }
     this.workerHashrates = new Array(this.workers.length).fill(0);

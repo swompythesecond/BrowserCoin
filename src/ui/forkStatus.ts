@@ -4,6 +4,11 @@
  * median-time-past, never by this wall-clock estimate (see chain/fork.ts).
  */
 import { forkActivationTime } from '../chain/fork.js';
+import {
+  SANDGLASS_FORK_HEIGHT,
+  SANDGLASS_ANCHOR_TIMESTAMP,
+  TARGET_BLOCK_TIME_S,
+} from '../chain/genesis.js';
 
 function formatDuration(secs: number): string {
   if (secs <= 0) return 'now';
@@ -39,4 +44,36 @@ export function forkAdoptionText(forkReadyCount: number, peerCount: number): str
 /** Human-readable activation date (UTC) for display. */
 export function forkActivationDateUTC(): string {
   return new Date(forkActivationTime() * 1000).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+}
+
+// ─── Fork #2: Sandglass PoW (height-gated) ──────────────────────────────────
+
+export interface SandglassCountdown {
+  activated: boolean;
+  blocksRemaining: number;
+  line: string;
+}
+
+/**
+ * Countdown to the Sandglass PoW fork. Height-gated, so the accurate measure is
+ * BLOCKS remaining (fork height − current height); the time is estimated from
+ * that at the target block spacing. Consensus activation is by height, never by
+ * this estimate.
+ */
+export function sandglassCountdown(currentHeight: number): SandglassCountdown {
+  const remaining = SANDGLASS_FORK_HEIGHT - currentHeight;
+  if (remaining <= 0) {
+    return { activated: true, blocksRemaining: 0, line: 'Sandglass mining is LIVE on the network' };
+  }
+  const eta = formatDuration(remaining * TARGET_BLOCK_TIME_S);
+  return {
+    activated: false,
+    blocksRemaining: remaining,
+    line: `New mining algorithm activates at block ${SANDGLASS_FORK_HEIGHT.toLocaleString()} — ${remaining.toLocaleString()} blocks to go (~${eta})`,
+  };
+}
+
+/** Announced Sandglass activation date (UTC) for display. */
+export function sandglassActivationDateUTC(): string {
+  return new Date(SANDGLASS_ANCHOR_TIMESTAMP * 1000).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 }
