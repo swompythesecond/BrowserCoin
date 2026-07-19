@@ -73,9 +73,15 @@ function writeU32be(b: Uint8Array, off: number, v: number): void {
  * 32-byte digest compared against the block's target (hashMeetsTarget), exactly
  * like the Argon2id powHash it replaces.
  */
-export function sandglassHash(headerBytes: Uint8Array): Uint8Array {
-  const seed = sha256(headerBytes); // 32 bytes
-
+/**
+ * The memory-hard core: fill the 512 KiB buffer from the 256-bit seed and run
+ * the 4-chain walk, returning the pre-finalize state (h + the 4 accumulators).
+ * sandglassHash wraps this with the SHA-256 seed/finalize. Kept as its own
+ * function so `walkStateForTest` can assert the walk is keyed on the FULL seed
+ * (a keying regression here — e.g. folding the seed to 32 bits — would change
+ * this state for seeds that used to collide, and the regression test would fail).
+ */
+function fillAndWalk(seed: Uint8Array): [number, number, number, number, number] {
   // The 8 words of the 256-bit seed.
   const sw = new Uint32Array(8);
   for (let i = 0; i < 8; i++) sw[i] = readU32be(seed, i * 4);
@@ -111,6 +117,13 @@ export function sandglassHash(headerBytes: Uint8Array): Uint8Array {
     a3 = mix((a3 ^ buf[i3]!) >>> 0); buf[i3] = (a3 + s) >>> 0; i3 = a3 & MASK;
   }
 
+  return [h, a0, a1, a2, a3];
+}
+
+export function sandglassHash(headerBytes: Uint8Array): Uint8Array {
+  const seed = sha256(headerBytes); // 32 bytes
+  const [h, a0, a1, a2, a3] = fillAndWalk(seed);
+
   // Phase 3 — finalize. The 4 chain accumulators transitively depend on the
   // full walk over the whole buffer, so hashing them (plus h and the seed)
   // binds the output to the memory-hard work.
@@ -122,6 +135,16 @@ export function sandglassHash(headerBytes: Uint8Array): Uint8Array {
   writeU32be(fin, 44, a2);
   writeU32be(fin, 48, a3);
   return sha256(fin);
+}
+
+/**
+ * Test-only: the pre-finalize walk state (h + the 4 accumulators) for a seed.
+ * Lets tests assert the memory-hard walk is keyed on the full 256-bit seed (two
+ * seeds that only collided under the old 32-bit fold must now yield DIFFERENT
+ * walk state). Not used in production.
+ */
+export function walkStateForTest(seed: Uint8Array): [number, number, number, number, number] {
+  return fillAndWalk(seed);
 }
 
 /** Exposed for test-vector generation and cross-checks. */
