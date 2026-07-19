@@ -475,7 +475,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       const cd = sandglassCountdown(node.chain.height);
       forkBannerText.innerHTML = cd.activated
         ? `<b>Sandglass mining is LIVE.</b> Your browser is now competitive with GPUs again.`
-        : `<b>New mining algorithm incoming (Sandglass).</b> ${cd.line} <span class="muted">(~${sandglassActivationDateUTC()})</span>. Keep this tab refreshed so you flip with the network.`;
+        : `<b>New mining algorithm incoming (Sandglass v3).</b> ${cd.line} <span class="muted">(~${sandglassActivationDateUTC()})</span>. Keep this tab refreshed so you flip with the network.`;
     };
     updateForkBanner();
     forkBanner.hidden = false;
