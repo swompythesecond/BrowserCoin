@@ -61,13 +61,13 @@ be fetched from the limited recent-header window — same trick genesis uses.
 
 ## Deploy config (set in `chain/genesis.ts`)
 
-Announced activation: **Friday 2026-07-24 16:00 UTC**, height-gated at block
-**34,800** (set from mainnet height 31,838 on 2026-07-19 + ~2,960 blocks lead).
+Announced activation: **2026-07-22 14:00 CEST (12:00 UTC)**, height-gated at block
+**33,550** (set from mainnet height 32,024 on 2026-07-19 20:18 UTC + ~1,526 blocks lead).
 
-1. **`SANDGLASS_FORK_HEIGHT = 34_800`** — the real trigger. **Deploy the frontend
+1. **`SANDGLASS_FORK_HEIGHT = 33_550`** — the real trigger. **Deploy the frontend
    well before the chain reaches this height** so tabs auto-update and flip
    together. Announce the height AND the ~date.
-2. **`SANDGLASS_ANCHOR_TIMESTAMP = 1784908800`** (2026-07-24 16:00 UTC) — the
+2. **`SANDGLASS_ANCHOR_TIMESTAMP = 1784721600`** (2026-07-22 12:00 UTC) — the
    ASERT re-anchor point ≈ when the chain reaches the fork height. A rough
    estimate is fine; ASERT absorbs a small offset within a halflife (600 s).
 3. **`SANDGLASS_ANCHOR_ATTEMPTS = 5_000_000`** — reset difficulty = `(honest
@@ -86,7 +86,7 @@ wipe IndexedDB / invalidate history and would reset the chain.
 Because the algorithm change swaps out the whole hashrate (Argon2id GPU farms →
 honest Sandglass browsers/CPUs), the reset difficulty is an estimate of the new
 hashrate. If it's set easier than reality, expect a **short burst of
-faster-than-150 s blocks** in the first ~10–30 minutes after block 34,800, then
+faster-than-150 s blocks** in the first ~10–30 minutes after block 33,550, then
 ASERT (halflife 600 s) settles it back to ~150 s. This is normal for any PoW
 algorithm fork (Monero saw the same after each of its). A local reproduction of
 this exact behaviour is in the test notes below.

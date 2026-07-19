@@ -198,15 +198,15 @@ export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
 //      = (honest Sandglass hashrate in H/s) × TARGET_BLOCK_TIME_S. Determines
 //      the reset difficulty. ERR LOW (easier): too-easy self-corrects in
 //      minutes as ASERT ramps difficulty up; too-hard risks a slow-block stall.
-// Announced activation: Friday 2026-07-24 16:00 UTC. Height-gated at
-// SANDGLASS_FORK_HEIGHT (the real trigger); the date is the estimate of when
-// the chain reaches it (~575 blocks/day). Set from mainnet height 31,838 on
-// 2026-07-19 + ~2,960 blocks of lead. DEPLOY THE FRONTEND WELL BEFORE this
-// height so tabs auto-update and flip together.
-export const SANDGLASS_FORK_HEIGHT = 34_800;
+// Announced activation (community vote): 2026-07-22 14:00 CEST (= 12:00 UTC).
+// Height-gated at SANDGLASS_FORK_HEIGHT (the real trigger); the date/time is the
+// estimate of when the chain reaches it (~576 blocks/day). Set from mainnet
+// height 32,024 on 2026-07-19 20:18 UTC + ~1,526 blocks of lead. DEPLOY THE
+// FRONTEND WELL BEFORE this height so tabs auto-update and flip together.
+export const SANDGLASS_FORK_HEIGHT = 33_550;
 
 // ASERT re-anchor point for the reset (see consensus.ts). ≈ the estimated time
-// the chain reaches SANDGLASS_FORK_HEIGHT. Set to 2026-07-24 16:00 UTC.
+// the chain reaches SANDGLASS_FORK_HEIGHT. Set to 2026-07-22 12:00 UTC (14:00 CEST).
 //
 // ⚠️ Only a SOFT estimate because of the safety band below. The raw ASERT
 // re-anchor is asymmetric and dangerous: if the chain reaches the fork height
@@ -215,7 +215,7 @@ export const SANDGLASS_FORK_HEIGHT = 34_800;
 // neutralizes both tails during the settling window, so an estimate off by hours
 // is safe. If the chain is visibly ahead of schedule as the fork nears, biasing
 // this a few hours EARLIER costs nothing (a small benign burst).
-export const SANDGLASS_ANCHOR_TIMESTAMP = 1784908800;
+export const SANDGLASS_ANCHOR_TIMESTAMP = 1784721600;
 
 // After the fork, the ASERT re-anchor difficulty is clamped to within 4× of the
 // reset (each direction) for this many blocks, so a wrong anchor-timestamp
