@@ -59,22 +59,47 @@ difficulty. The re-anchor uses hardcoded constants (`SANDGLASS_FORK_HEIGHT`,
 `SANDGLASS_ANCHOR_TIMESTAMP`, `SANDGLASS_ANCHOR_TARGET`) so the anchor never has to
 be fetched from the limited recent-header window — same trick genesis uses.
 
-## Deploy checklist — set these three (in `chain/genesis.ts`)
+## Deploy config (set in `chain/genesis.ts`)
 
-All three are `PLACEHOLDER`s today:
+Announced activation: **Friday 2026-07-24 16:00 UTC**, height-gated at block
+**34,800** (set from mainnet height 31,838 on 2026-07-19 + ~2,960 blocks lead).
 
-1. **`SANDGLASS_FORK_HEIGHT`** — current tip + lead time for refresh. Announce it.
-2. **`SANDGLASS_ANCHOR_TIMESTAMP`** — estimated unix time the chain reaches the
-   fork height. A rough estimate is fine; ASERT absorbs a small offset within a
-   halflife (600 s).
-3. **`SANDGLASS_ANCHOR_ATTEMPTS`** — expected hash attempts per block right after
-   the fork = `(honest Sandglass H/s) × 150`. **Err LOW (easier).** Too-easy
-   self-corrects in minutes as ASERT ramps difficulty up; too-hard risks a
-   slow-block stall. If unsure, estimate the honest hashrate from the current
-   number of distinct non-farm miners × ~2 kH/s each and halve it.
+1. **`SANDGLASS_FORK_HEIGHT = 34_800`** — the real trigger. **Deploy the frontend
+   well before the chain reaches this height** so tabs auto-update and flip
+   together. Announce the height AND the ~date.
+2. **`SANDGLASS_ANCHOR_TIMESTAMP = 1784908800`** (2026-07-24 16:00 UTC) — the
+   ASERT re-anchor point ≈ when the chain reaches the fork height. A rough
+   estimate is fine; ASERT absorbs a small offset within a halflife (600 s).
+3. **`SANDGLASS_ANCHOR_ATTEMPTS = 5_000_000`** — reset difficulty = `(honest
+   Sandglass H/s) × 150`. ⚠️ **VERIFY against the expected post-fork hashrate.**
+   The GPU farms leave at the fork, so the network becomes browsers/CPUs — a much
+   lower, unknown hashrate. **Err LOW (easier):** too-easy just means a brief
+   spell of fast blocks that ASERT ramps out of within ~10–30 min (a difficulty
+   transient, NOT the pathological storm — that only happens if the anchor
+   timestamp is wildly wrong); too-hard risks a slow-block stall.
 
 Do **not** bump the PoW salt, `BROWSERCOIN_NETWORK`, or `CHAIN_VERSION` — those
 wipe IndexedDB / invalidate history and would reset the chain.
+
+## Difficulty at the fork — what users will see
+
+Because the algorithm change swaps out the whole hashrate (Argon2id GPU farms →
+honest Sandglass browsers/CPUs), the reset difficulty is an estimate of the new
+hashrate. If it's set easier than reality, expect a **short burst of
+faster-than-150 s blocks** in the first ~10–30 minutes after block 34,800, then
+ASERT (halflife 600 s) settles it back to ~150 s. This is normal for any PoW
+algorithm fork (Monero saw the same after each of its). A local reproduction of
+this exact behaviour is in the test notes below.
+
+## Local testing done
+
+Verified end-to-end on 2026-07-19 with the full local stack (browser tab + api
+server + peerjs), mining a real chain across a low test fork height: Argon2id
+blocks below the fork, Sandglass at/after, difficulty reset + re-anchor, and the
+api server validating the mixed chain. Use `scripts/bootstrap-local-chain.mts`
+to seed a local api server so a fresh tab can sync to a real tip and mine (a
+height-0 network leaves a solo node stuck in "syncing"). The one-block-burst
+above is exactly what a mis-set `ANCHOR_ATTEMPTS` produces locally.
 
 ## Test / rollout plan (staged — do not skip)
 
