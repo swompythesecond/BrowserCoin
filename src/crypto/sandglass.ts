@@ -76,14 +76,23 @@ function writeU32be(b: Uint8Array, off: number, v: number): void {
 export function sandglassHash(headerBytes: Uint8Array): Uint8Array {
   const seed = sha256(headerBytes); // 32 bytes
 
-  // Initial fill state: fold all 8 seed words through the mixer so the whole
-  // 256-bit seed influences the (deterministic) buffer, not just 32 bits.
-  let h = GOLDEN;
-  for (let i = 0; i < 8; i++) h = mix((h ^ readU32be(seed, i * 4)) >>> 0);
+  // The 8 words of the 256-bit seed.
+  const sw = new Uint32Array(8);
+  for (let i = 0; i < 8; i++) sw[i] = readU32be(seed, i * 4);
 
-  // Phase 1 — fill (chained, no shortcut).
+  // Phase 1 — fill. One seed word is injected on EVERY step (cyclically), so the
+  // buffer — and therefore the entire walk that reads it — is keyed by all 256
+  // seed bits, not by a low-entropy fold.
+  //
+  // This is the fix for a time-memory tradeoff: if the fill depended on only a
+  // 32-bit state, there would be just 2^32 distinct walks, reusable across every
+  // block forever. A farm could precompute a table (state -> walk result) and
+  // skip the memory-hard walk entirely, defeating the whole design. With the full
+  // seed mixed in, a precomputation table would need ~2^256 entries — infeasible.
+  // Still chained (h_i depends on h_{i-1}), so there's no closed form / jump-ahead.
+  let h = mix((sw[0]! ^ GOLDEN) >>> 0);
   for (let i = 0; i < W; i++) {
-    h = mix((h + GOLDEN) >>> 0);
+    h = mix((h + GOLDEN + sw[i & 7]!) >>> 0);
     buf[i] = h;
   }
 
