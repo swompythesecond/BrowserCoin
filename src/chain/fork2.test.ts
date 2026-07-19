@@ -85,4 +85,32 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
     const d = nextDifficulty(SANDGLASS_FORK_HEIGHT + 101, [fastParent], fastParent.timestamp + 1);
     expect(compactToTarget(d)).toBeLessThan(compactToTarget(SANDGLASS_ANCHOR_DIFFICULTY_COMPACT));
   });
+
+  it('CLAMPS post-fork difficulty within 4x of the reset during the settling window', () => {
+    const anchorTarget = compactToTarget(SANDGLASS_ANCHOR_DIFFICULTY_COMPACT);
+    // Extreme EARLY arrival (would explode difficulty → chain stall without the
+    // clamp): parent far ahead of the anchor schedule, still inside the window.
+    const wayAheadParent = hdr({
+      height: SANDGLASS_FORK_HEIGHT + 5,
+      timestamp: SANDGLASS_ANCHOR_TIMESTAMP - 24 * 3600, // arrived a full day EARLY
+      difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
+    });
+    const dHard = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayAheadParent], SANDGLASS_ANCHOR_TIMESTAMP - 24 * 3600 + 1);
+    // Capped near 4× reset — NOT exploded to a near-zero (unmineable) target.
+    // (compactToTarget round-trips lose a few low bits, so allow a wide band.)
+    expect(compactToTarget(dHard)).toBeGreaterThan(anchorTarget / 8n); // far above exploded
+    expect(compactToTarget(dHard)).toBeLessThan(anchorTarget); // still harder than reset
+
+    // Extreme LATE arrival (would slam to floor → instant-block storm): parent far
+    // behind the anchor schedule, still inside the window.
+    const wayBehindParent = hdr({
+      height: SANDGLASS_FORK_HEIGHT + 5,
+      timestamp: SANDGLASS_ANCHOR_TIMESTAMP + 24 * 3600,
+      difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
+    });
+    const dEasy = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayBehindParent], SANDGLASS_ANCHOR_TIMESTAMP + 24 * 3600 + TARGET_BLOCK_TIME_S);
+    // Capped near reset/4 — NOT collapsed to the floor (instant-block storm).
+    expect(compactToTarget(dEasy)).toBeLessThan(anchorTarget * 8n); // far below floor
+    expect(compactToTarget(dEasy)).toBeGreaterThan(anchorTarget); // still easier than reset
+  });
 });

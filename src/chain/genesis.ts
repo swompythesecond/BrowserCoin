@@ -205,10 +205,24 @@ export const FORK1_ACTIVATION_TIME = 1783267200; // 2026-07-05T16:00:00Z
 // height so tabs auto-update and flip together.
 export const SANDGLASS_FORK_HEIGHT = 34_800;
 
-// ASERT re-anchor point for the reset (see consensus.ts). ≈ the time the chain
-// reaches SANDGLASS_FORK_HEIGHT — a rough estimate is fine (ASERT absorbs a small
-// offset within its halflife). Set to 2026-07-24 16:00 UTC.
+// ASERT re-anchor point for the reset (see consensus.ts). ≈ the estimated time
+// the chain reaches SANDGLASS_FORK_HEIGHT. Set to 2026-07-24 16:00 UTC.
+//
+// ⚠️ Only a SOFT estimate because of the safety band below. The raw ASERT
+// re-anchor is asymmetric and dangerous: if the chain reaches the fork height
+// EARLIER than this timestamp, difficulty explodes and the whole network stalls
+// (and can't self-heal); LATER is benign (a floor-difficulty burst). The clamp
+// neutralizes both tails during the settling window, so an estimate off by hours
+// is safe. If the chain is visibly ahead of schedule as the fork nears, biasing
+// this a few hours EARLIER costs nothing (a small benign burst).
 export const SANDGLASS_ANCHOR_TIMESTAMP = 1784908800;
+
+// After the fork, the ASERT re-anchor difficulty is clamped to within 4× of the
+// reset (each direction) for this many blocks, so a wrong anchor-timestamp
+// estimate can neither stall the chain nor cause an instant-block storm while the
+// timestamp offset drains out. ~2000 blocks ≈ 3.5 days — far longer than any
+// plausible transient. See nextDifficulty in consensus.ts.
+export const SANDGLASS_ANCHOR_CLAMP_BLOCKS = 2000;
 
 // ⚠️ VERIFY BEFORE DEPLOY. Expected hash ATTEMPTS per block right after the fork
 // = (honest Sandglass hashrate in H/s) × 150. This sets the reset difficulty.

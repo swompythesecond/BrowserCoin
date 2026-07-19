@@ -9,6 +9,7 @@ import {
   MAX_TARGET,
   MTP_WINDOW,
   SANDGLASS_ANCHOR_ATTEMPTS,
+  SANDGLASS_ANCHOR_CLAMP_BLOCKS,
   SANDGLASS_ANCHOR_TIMESTAMP,
   SANDGLASS_FORK_HEIGHT,
   TARGET_BLOCK_TIME_S,
@@ -184,9 +185,28 @@ export function nextDifficulty(
   // block (hardcoded height/time/target constants, so the anchor never needs to
   // be fetched from the recent-header window).
   if (nextHeight > SANDGLASS_FORK_HEIGHT) {
-    return targetToCompact(
-      asertTarget(prev.height, prev.timestamp, SANDGLASS_FORK_HEIGHT, SANDGLASS_ANCHOR_TIMESTAMP, SANDGLASS_ANCHOR_TARGET),
-    );
+    let t = asertTarget(prev.height, prev.timestamp, SANDGLASS_FORK_HEIGHT, SANDGLASS_ANCHOR_TIMESTAMP, SANDGLASS_ANCHOR_TARGET);
+
+    // Safety band for the settling window right after the fork. The re-anchor
+    // uses a hardcoded ESTIMATE of when the chain reaches the fork height. If the
+    // chain arrives EARLIER than that estimate (the likely direction — pre-fork
+    // hashrate tends to run ahead of schedule), the raw ASERT target collapses
+    // and difficulty explodes, stalling the whole upgraded network — and it
+    // cannot self-heal (see the emergency-drop grandparent gate, which can't fire
+    // across the fork). Symmetrically, arriving much later would slam difficulty
+    // to the floor and produce an instant-block storm. So for the first
+    // SANDGLASS_ANCHOR_CLAMP_BLOCKS blocks we clamp the target to within 4× of the
+    // reset in each direction: block times stay in ~[T/4, 4T] (no stall, no
+    // storm) while the timestamp offset drains out, after which the chain's own
+    // timestamps dominate and unclamped ASERT is safe. This makes the anchor
+    // timestamp a soft estimate rather than a chain-bricking landmine.
+    if (nextHeight <= SANDGLASS_FORK_HEIGHT + SANDGLASS_ANCHOR_CLAMP_BLOCKS) {
+      const hardest = SANDGLASS_ANCHOR_TARGET / 4n; // difficulty ≤ 4× reset
+      const easiest = SANDGLASS_ANCHOR_TARGET * 4n; // difficulty ≥ reset/4
+      if (t < hardest) t = hardest;
+      else if (t > easiest) t = easiest;
+    }
+    return targetToCompact(t);
   }
   return targetToCompact(asertTarget(prev.height, prev.timestamp, 0, GENESIS_TIMESTAMP, ANCHOR_TARGET));
 }
