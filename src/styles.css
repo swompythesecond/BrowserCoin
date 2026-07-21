@@ -108,10 +108,10 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 
 .nav-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   justify-content: center;
-  overflow-x: auto;
-  scrollbar-width: none;
+  min-width: 0;
 }
 .nav-tabs::-webkit-scrollbar { display: none; }
 .nav-tab {
@@ -1063,7 +1063,9 @@ label {
   .nav-tabs {
     grid-column: 1 / -1;
     order: 3;
-    padding-bottom: 2px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
     justify-content: flex-start;
     margin: 0 -14px;
     padding: 0 14px 2px;
