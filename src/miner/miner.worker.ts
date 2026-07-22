@@ -22,10 +22,21 @@ import { powHash } from '../crypto/pow.js';
 import { hashMeetsTarget } from '../util/binary.js';
 
 const NONCE_OFFSET = 112;
-// Argon2id at 32 MB / 1 iter takes ~40-125 ms per hash, so each iteration is
-// its own natural batch — no need to amortize loop overhead like we did with
-// SHA-256.
-const BATCH = 1;
+/**
+ * How much work to do between event-loop yields, in ms. The yield at the bottom
+ * of the grind loop is a `setTimeout(0)`, and a *chained* setTimeout loop trips
+ * the HTML nested-timer clamp — 4 ms per call in Chrome/Firefox, 1 ms at best.
+ *
+ * Argon2id took 40-125 ms per hash, so yielding after every single hash cost
+ * only a few percent and BATCH was hardcoded to 1. Sandglass is ~9 ms per hash,
+ * where that same 4 ms clamp burns ~31% of the thread. So we size the batch by
+ * measured time instead of by a fixed hash count: 64 ms keeps `stop` messages
+ * responsive (Argon2id's single hash already blocked longer than that) while
+ * dropping the yield overhead to ~6%. Under Argon2id the batch simply stays at
+ * 1, so pre-fork behaviour is unchanged.
+ */
+const YIELD_TARGET_MS = 64;
+const MAX_BATCH = 1024;
 
 type StartMsg = {
   type: 'start';
@@ -75,9 +86,13 @@ async function grind(msg: StartMsg, myGen: number): Promise<void> {
   let report = performance.now();
   let workWindowStart = report;
 
+  // Adapts to the active PoW: ~1 under Argon2id, ~7 under Sandglass.
+  let batch = 1;
+
   while (mining && myGen === generation) {
     let completed = 0;
-    for (let i = 0; i < BATCH; i++) {
+    const batchStart = performance.now();
+    for (let i = 0; i < batch; i++) {
       // Write u32 BE nonce into header.
       header[NONCE_OFFSET]     = (nonce >>> 24) & 0xff;
       header[NONCE_OFFSET + 1] = (nonce >>> 16) & 0xff;
@@ -122,6 +137,12 @@ async function grind(msg: StartMsg, myGen: number): Promise<void> {
     hashes += completed;
 
     const now = performance.now();
+    // Resize the batch toward YIELD_TARGET_MS. Only on a full batch — a short
+    // one means the OOM path bailed early and its elapsed time is meaningless.
+    if (completed === batch) {
+      const per = (now - batchStart) / batch;
+      if (per > 0) batch = Math.max(1, Math.min(MAX_BATCH, Math.round(YIELD_TARGET_MS / per)));
+    }
     if (now - report >= 1000) {
       (self as DedicatedWorkerGlobalScope).postMessage({
         type: 'hashrate',
