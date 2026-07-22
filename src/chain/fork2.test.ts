@@ -43,7 +43,7 @@ describe('fork #2 — PoW algorithm gating (by height)', () => {
 describe('fork #2 — difficulty reset and re-anchor', () => {
   it('resets to the Sandglass anchor difficulty at the fork block', () => {
     const parent = hdr({ height: SANDGLASS_FORK_HEIGHT - 1, timestamp: SANDGLASS_ANCHOR_TIMESTAMP });
-    expect(nextDifficulty(SANDGLASS_FORK_HEIGHT, [parent], SANDGLASS_ANCHOR_TIMESTAMP)).toBe(
+    expect(nextDifficulty(SANDGLASS_FORK_HEIGHT, [parent], SANDGLASS_ANCHOR_TIMESTAMP, null)).toBe(
       SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
     );
   });
@@ -59,7 +59,7 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
     const d = nextDifficulty(
       SANDGLASS_FORK_HEIGHT + 11,
       [onPaceParent],
-      SANDGLASS_ANCHOR_TIMESTAMP + 11 * TARGET_BLOCK_TIME_S,
+      SANDGLASS_ANCHOR_TIMESTAMP + 11 * TARGET_BLOCK_TIME_S, null,
     );
     expect(d).toBe(SANDGLASS_ANCHOR_DIFFICULTY_COMPACT);
   });
@@ -72,7 +72,7 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
       timestamp: SANDGLASS_ANCHOR_TIMESTAMP + 10 * TARGET_BLOCK_TIME_S + 4 * 3600, // 4h behind
       difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
     });
-    const d = nextDifficulty(SANDGLASS_FORK_HEIGHT + 11, [slowParent], slowParent.timestamp + TARGET_BLOCK_TIME_S);
+    const d = nextDifficulty(SANDGLASS_FORK_HEIGHT + 11, [slowParent], slowParent.timestamp + TARGET_BLOCK_TIME_S, null);
     expect(compactToTarget(d)).toBeGreaterThan(compactToTarget(SANDGLASS_ANCHOR_DIFFICULTY_COMPACT));
   });
 
@@ -82,7 +82,7 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
       timestamp: SANDGLASS_ANCHOR_TIMESTAMP + 100 * TARGET_BLOCK_TIME_S - 3 * 3600, // 3h ahead
       difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
     });
-    const d = nextDifficulty(SANDGLASS_FORK_HEIGHT + 101, [fastParent], fastParent.timestamp + 1);
+    const d = nextDifficulty(SANDGLASS_FORK_HEIGHT + 101, [fastParent], fastParent.timestamp + 1, null);
     expect(compactToTarget(d)).toBeLessThan(compactToTarget(SANDGLASS_ANCHOR_DIFFICULTY_COMPACT));
   });
 
@@ -95,7 +95,7 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
       timestamp: SANDGLASS_ANCHOR_TIMESTAMP - 24 * 3600, // arrived a full day EARLY
       difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
     });
-    const dHard = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayAheadParent], SANDGLASS_ANCHOR_TIMESTAMP - 24 * 3600 + 1);
+    const dHard = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayAheadParent], SANDGLASS_ANCHOR_TIMESTAMP - 24 * 3600 + 1, null);
     // Capped near 4× reset — NOT exploded to a near-zero (unmineable) target.
     // (compactToTarget round-trips lose a few low bits, so allow a wide band.)
     expect(compactToTarget(dHard)).toBeGreaterThan(anchorTarget / 8n); // far above exploded
@@ -108,7 +108,7 @@ describe('fork #2 — difficulty reset and re-anchor', () => {
       timestamp: SANDGLASS_ANCHOR_TIMESTAMP + 24 * 3600,
       difficulty: SANDGLASS_ANCHOR_DIFFICULTY_COMPACT,
     });
-    const dEasy = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayBehindParent], SANDGLASS_ANCHOR_TIMESTAMP + 24 * 3600 + TARGET_BLOCK_TIME_S);
+    const dEasy = nextDifficulty(SANDGLASS_FORK_HEIGHT + 6, [wayBehindParent], SANDGLASS_ANCHOR_TIMESTAMP + 24 * 3600 + TARGET_BLOCK_TIME_S, null);
     // Capped near reset/4 — NOT collapsed to the floor (instant-block storm).
     expect(compactToTarget(dEasy)).toBeLessThan(anchorTarget * 8n); // far below floor
     expect(compactToTarget(dEasy)).toBeGreaterThan(anchorTarget); // still easier than reset

@@ -8,6 +8,7 @@ import {
   HALFLIFE_S,
   MAX_TARGET,
   MTP_WINDOW,
+  SANDGLASS2_ANCHOR_HEIGHT,
   SANDGLASS_ANCHOR_ATTEMPTS,
   SANDGLASS_ANCHOR_CLAMP_BLOCKS,
   SANDGLASS_ANCHOR_TIMESTAMP,
@@ -120,10 +121,18 @@ export async function checkPoW(header: BlockHeader): Promise<boolean> {
  * use. Caller passes the candidate block's intended timestamp for the
  * emergency-drop check.
  *
- * Retarget rule (v5): ASERT, anchored at genesis. The next target is computed
- * as `anchor_target × 2^((Δt − n × T) / halflife)`, where Δt is wall-clock
- * since genesis and n is the height count since genesis. This is the same
+ * Retarget rule (v5): ASERT. The next target is computed as
+ * `anchor_target × 2^((Δt − n × T) / halflife)`, where Δt is wall-clock since
+ * the anchor and n is the height count since the anchor. This is the same
  * algorithm BCH adopted in Nov 2020.
+ *
+ * Three anchoring regimes, by height:
+ *   • ≤ SANDGLASS_FORK_HEIGHT      — anchored at genesis (hardcoded).
+ *   • 33,551..35,550               — fork #2: anchored at the fork block with a
+ *     hardcoded ESTIMATED timestamp and a target clamp. Frozen history; this is
+ *     the combination that stalled the chain (see genesis.ts). Never reuse it.
+ *   • > SANDGLASS2_ANCHOR_HEIGHT   — fork #3: anchored on the REAL header of
+ *     block 35,550, supplied by the caller. No clamp, no estimate.
  *
  * Why this works where the previous attempts didn't:
  *   • No sliding window → no clustering pathology. The v3 window medians
@@ -141,14 +150,24 @@ export async function checkPoW(header: BlockHeader): Promise<boolean> {
  *     the grandparent timestamp so it can't be invoked at will by a single
  *     attacker block.
  *
- * `previousHeaders` is passed only for the emergency-drop grandparent
- * lookup. ASERT itself uses just the parent header (last element) plus
- * the hardcoded anchor values.
+ * `previousHeaders` is passed only for the emergency-drop grandparent lookup —
+ * its LENGTH must never affect the result. ASERT uses just the parent header
+ * (last element) plus the anchor.
+ *
+ * `sandglass2Anchor` is REQUIRED (pass `null` below the fork-#3 height) rather
+ * than optional, and is never recovered from `previousHeaders`. Both properties
+ * are deliberate: an optional parameter lets a missed call site type-check, and
+ * a lookback-window fallback would silently rescue it for exactly
+ * RETARGET_LOOKBACK blocks before failing — and the two consensus paths pass
+ * different window sizes (60 for block validation, MTP_WINDOW for fast sync), so
+ * such a fallback would partition full nodes from fast-syncing tabs. Requiring
+ * the argument turns that entire class into a compile error.
  */
 export function nextDifficulty(
   nextHeight: number,
   previousHeaders: BlockHeader[],
-  candidateTimestamp?: number,
+  candidateTimestamp: number | undefined,
+  sandglass2Anchor: BlockHeader | null,
 ): number {
   if (nextHeight === 0) return GENESIS_DIFFICULTY_COMPACT;
 
@@ -168,6 +187,31 @@ export function nextDifficulty(
   // so this gates the rule against one-off "set my timestamp to parent+901s"
   // discount-mining. Genesis is never counted as a grandparent (its hardcoded
   // timestamp would always trip the rule).
+  //
+  // ⚠️ KNOWN DEFECT, deliberately NOT fixed in fork #3 — do not "clean this up"
+  // without reading this first.
+  //
+  // This rule was added 2026-05-21 (0dff511) for the v3 retarget: a 50-block
+  // sliding window of MEDIANS, under which a stall genuinely could not
+  // self-correct (one late block barely moves a median, and you cannot produce
+  // the further blocks needed to move it because you are stalled). A manual
+  // escape hatch was correct for that algorithm. ASERT (094718d) replaced the
+  // window and recovers from a stall in ONE step — the late block's timestamp
+  // goes straight into the drift term — but this rule was carried across
+  // unexamined. Above the fork-#3 anchor it is now strictly harmful: it returns
+  // early, preempting unbounded ASERT, and eases by a fixed 2× per block where
+  // ASERT would ease exponentially. Measured at 3 h blocks: this returns 1.0e7
+  // attempts where fork-#3 ASERT returns 127 — 78,741× harder, turning one
+  // recovery block into ~17. Separately, the grandparent gate means it cannot
+  // fire during a stall at all (it reads frozen history), so it no longer opens
+  // in the emergency it is named for.
+  //
+  // It is kept because REMOVING it is the more dangerous change today: when it
+  // does fire, a pre-fork-#3 and a post-fork-#3 build compute the SAME value, so
+  // it cannot cause a chain split. Gating it above the anchor would make the two
+  // builds disagree on a block both consider mineable — a real split, in exactly
+  // the slow-chain scenario that is already the main risk. Fix it when there is
+  // time to test it, not on a one-day fork deadline.
   if (candidateTimestamp !== undefined && previousHeaders.length >= 2) {
     const grand = previousHeaders[previousHeaders.length - 2]!;
     if (grand.height > 0) {
@@ -181,9 +225,47 @@ export function nextDifficulty(
     }
   }
 
+  // Fork #3: plain ASERT, re-anchored on the REAL header of block
+  // SANDGLASS2_ANCHOR_HEIGHT — its actual mined timestamp and its actual
+  // difficulty, both read from the chain, neither estimated. At the first block
+  // above the anchor the drift term is therefore exactly 0 and difficulty simply
+  // carries over unchanged; the chain resumes at the pace it was already running
+  // and ASERT corrects it from there. Nothing here can be "off", so there is
+  // nothing to contain: no clamp, no settling band, no expiry, no windup, no
+  // future cliff. Difficulty is free to track hashrate in both directions, which
+  // is the whole reason ASERT is here. Same shape as the genesis-anchored path
+  // below — that one has held target pace for 33k blocks.
+  if (nextHeight > SANDGLASS2_ANCHOR_HEIGHT) {
+    // Assertion, not a recovery path: the parameter is required, so a missing or
+    // wrong-height anchor is a caller bug the compiler could not catch (a `null`
+    // passed where a header belongs). Never fall back to a guess — producing a
+    // plausible-but-wrong difficulty is precisely what made fork #2 unrecoverable.
+    const anchor = sandglass2Anchor;
+    if (anchor === null || anchor.height !== SANDGLASS2_ANCHOR_HEIGHT) {
+      throw new Error(
+        `fork #3 anchor header (height ${SANDGLASS2_ANCHOR_HEIGHT}) missing or wrong ` +
+        `(got ${anchor === null ? 'null' : `height ${anchor.height}`}) for block ${nextHeight}`,
+      );
+    }
+    return targetToCompact(
+      asertTarget(
+        prev.height,
+        prev.timestamp,
+        anchor.height,
+        anchor.timestamp,
+        compactToTarget(anchor.difficulty),
+      ),
+    );
+  }
+
   // ASERT. Pre-fork blocks anchor at genesis; fork-#2 blocks anchor at the fork
   // block (hardcoded height/time/target constants, so the anchor never needs to
   // be fetched from the recent-header window).
+  //
+  // ⚠️ FROZEN HISTORY. This branch now only ever runs for heights
+  // 33,551..SANDGLASS2_ANCHOR_HEIGHT, which are already mined. The clamp below
+  // is the fork-#3 bug (see genesis.ts) — do NOT "fix" it here; these blocks
+  // must keep validating exactly as they were accepted.
   if (nextHeight > SANDGLASS_FORK_HEIGHT) {
     let t = asertTarget(prev.height, prev.timestamp, SANDGLASS_FORK_HEIGHT, SANDGLASS_ANCHOR_TIMESTAMP, SANDGLASS_ANCHOR_TARGET);
 

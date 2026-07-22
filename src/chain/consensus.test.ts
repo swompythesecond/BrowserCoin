@@ -35,7 +35,7 @@ function chainAtTargetPace(blocks: number): BlockHeader[] {
 describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () => {
   it('returns genesis difficulty for height 0', () => {
     const headers: BlockHeader[] = [fakeHeader(0, GENESIS_TIMESTAMP, GENESIS_DIFFICULTY_COMPACT)];
-    expect(nextDifficulty(0, headers, GENESIS_TIMESTAMP + 1)).toBe(GENESIS_DIFFICULTY_COMPACT);
+    expect(nextDifficulty(0, headers, GENESIS_TIMESTAMP + 1, null)).toBe(GENESIS_DIFFICULTY_COMPACT);
   });
 
   it('clamps target to the floor — difficulty cannot fall below GENESIS', () => {
@@ -46,7 +46,7 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
       headers.push(fakeHeader(i, GENESIS_TIMESTAMP + i * TARGET_BLOCK_TIME_S * 100, GENESIS_DIFFICULTY_COMPACT));
     }
     const candidateTs = headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S * 100;
-    const next = nextDifficulty(headers.length, headers, candidateTs);
+    const next = nextDifficulty(headers.length, headers, candidateTs, null);
     expect(next).toBe(GENESIS_DIFFICULTY_COMPACT);
   });
 
@@ -58,14 +58,14 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
       headers.push(fakeHeader(i, GENESIS_TIMESTAMP + i * fastSpacing, GENESIS_DIFFICULTY_COMPACT));
     }
     const candidateTs = headers[headers.length - 1]!.timestamp + fastSpacing;
-    const next = nextDifficulty(headers.length, headers, candidateTs);
+    const next = nextDifficulty(headers.length, headers, candidateTs, null);
     expect(compactToTarget(next)).toBeLessThan(compactToTarget(GENESIS_DIFFICULTY_COMPACT));
   });
 
   it('keeps difficulty at floor when chain is mining at exactly target pace from genesis', () => {
     // ASERT result at target pace = anchor_target. Anchor is floor, so we stay at floor.
     const headers = chainAtTargetPace(20);
-    const next = nextDifficulty(headers.length, headers, headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S);
+    const next = nextDifficulty(headers.length, headers, headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S, null);
     expect(next).toBe(GENESIS_DIFFICULTY_COMPACT);
   });
 
@@ -85,7 +85,7 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     }
     headers.push(fakeHeader(10, GENESIS_TIMESTAMP + 10 * TARGET_BLOCK_TIME_S + HALFLIFE_S, GENESIS_DIFFICULTY_COMPACT));
 
-    const next = nextDifficulty(11, headers, headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S);
+    const next = nextDifficulty(11, headers, headers[headers.length - 1]!.timestamp + TARGET_BLOCK_TIME_S, null);
     // Anchor target is already at floor, so the "+1 halflife slow" deviation
     // pushes target above floor — but floor clamps. Verify floor is hit:
     expect(next).toBe(GENESIS_DIFFICULTY_COMPACT);
@@ -105,7 +105,7 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     headers[headers.length - 1]!.timestamp = headers[headers.length - 2]!.timestamp
       + (EMERGENCY_DROP_MULT + 1) * TARGET_BLOCK_TIME_S;
     const candidateTs = headers[headers.length - 1]!.timestamp + (EMERGENCY_DROP_MULT + 1) * TARGET_BLOCK_TIME_S;
-    const next = nextDifficulty(headers.length, headers, candidateTs);
+    const next = nextDifficulty(headers.length, headers, candidateTs, null);
     const oldTarget = compactToTarget(harder);
     const newTarget = compactToTarget(next);
     // Drop halves difficulty (doubles target). Bounded above by FLOOR_TARGET.
@@ -121,7 +121,7 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     }
     // Only the candidate's interval is slow; parent's was at target pace.
     const candidateTs = headers[headers.length - 1]!.timestamp + (EMERGENCY_DROP_MULT + 1) * TARGET_BLOCK_TIME_S;
-    const next = nextDifficulty(headers.length, headers, candidateTs);
+    const next = nextDifficulty(headers.length, headers, candidateTs, null);
     // Emergency drop did not fire — ASERT computes the result. The candidate
     // gap doesn't influence ASERT (it uses parent.timestamp), and the chain
     // has been running at target pace, so ASERT returns ~ANCHOR_TARGET (floor).
@@ -139,7 +139,7 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     const genesis = fakeHeader(0, GENESIS_TIMESTAMP, GENESIS_DIFFICULTY_COMPACT);
     const block1 = fakeHeader(1, GENESIS_TIMESTAMP + (EMERGENCY_DROP_MULT + 2) * TARGET_BLOCK_TIME_S, harder);
     const candidateTs = block1.timestamp + (EMERGENCY_DROP_MULT + 1) * TARGET_BLOCK_TIME_S;
-    const next = nextDifficulty(2, [genesis, block1], candidateTs);
+    const next = nextDifficulty(2, [genesis, block1], candidateTs, null);
     // No emergency drop. ASERT runs normally.
     // The candidate's parent was 8× target late, so ASERT will pin to floor.
     expect(next).toBe(GENESIS_DIFFICULTY_COMPACT);
@@ -160,8 +160,8 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     const midIdx = Math.floor(cheatedHeaders.length / 2);
     cheatedHeaders[midIdx]!.timestamp += TARGET_BLOCK_TIME_S * 100;
     const ts = cleanHeaders[cleanHeaders.length - 1]!.timestamp + TARGET_BLOCK_TIME_S;
-    const clean = nextDifficulty(cleanHeaders.length, cleanHeaders, ts);
-    const cheated = nextDifficulty(cheatedHeaders.length, cheatedHeaders, ts);
+    const clean = nextDifficulty(cleanHeaders.length, cleanHeaders, ts, null);
+    const cheated = nextDifficulty(cheatedHeaders.length, cheatedHeaders, ts, null);
     expect(cheated).toBe(clean);
   });
 
@@ -179,6 +179,6 @@ describe('difficulty (ASERT, anchored at genesis, FLOOR + emergency drop)', () =
     variantA.push(parent);
     variantB.push(parent);
     const ts = parent.timestamp + TARGET_BLOCK_TIME_S;
-    expect(nextDifficulty(21, variantA, ts)).toBe(nextDifficulty(21, variantB, ts));
+    expect(nextDifficulty(21, variantA, ts, null)).toBe(nextDifficulty(21, variantB, ts, null));
   });
 });

@@ -5,14 +5,13 @@ import { bytesToHex, compactToTarget } from '../util/binary.js';
 import { TICKER, UNIT_LONG } from '../brand.js';
 import { computeActivity, renderActivityRows, blockTime, timeAgo } from './activity.js';
 import { cardHeader, infoButton } from './info.js';
-import { sandglassCountdown, sandglassActivationDateUTC } from './forkStatus.js';
+import { sandglassCountdown, sandglassActivationDateUTC, fork3Status } from './forkStatus.js';
+import { SANDGLASS2_ANCHOR_HEIGHT } from '../chain/genesis.js';
 import { addressLink, blockLink, heightLink } from './explorerShared.js';
 import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
 import { openScanner } from './qrScanner.js';
-import { nextDifficulty } from '../chain/consensus.js';
-import { DIFFICULTY_WINDOW, MTP_WINDOW } from '../chain/genesis.js';
 import { isMiningOffline, openOfflineModal } from './miner.js';
 import { openPipMiner, pipMinerSupported } from './pip-miner.js';
 
@@ -50,6 +49,13 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       <span data-w="forkBannerText" class="text-sm" style="flex:1;min-width:0;"></span>
       <span data-slot="forkInfo"></span>
       <button class="ghost small" data-w="forkClose" aria-label="Dismiss" title="Dismiss" style="line-height:1;">✕</button>
+    </div>
+
+    <div class="card" data-w="fork3Banner" hidden style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:16px;border-left:3px solid #2ec26b;">
+      <span style="font-size:18px;line-height:1;">✅</span>
+      <span data-w="fork3BannerText" class="text-sm" style="flex:1;min-width:0;"></span>
+      <span data-slot="fork3Info"></span>
+      <button class="ghost small" data-w="fork3Close" aria-label="Dismiss" title="Dismiss" style="line-height:1;">✕</button>
     </div>
 
     <div class="grid grid-12">
@@ -340,9 +346,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     netHeightEl.textContent = `${node.chain.height}`;
 
     // Difficulty preview — what the next block would need to beat.
-    const nextHeight = node.chain.height + 1;
-    const lookback = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
-    const diff = nextDifficulty(nextHeight, lookback, Math.floor(Date.now() / 1000));
+    const diff = node.chain.expectedNextDifficulty(Math.floor(Date.now() / 1000));
     const target = compactToTarget(diff);
     const bits = target <= 0n ? 256 : 256 - target.toString(2).length;
     const expected = target > 0n ? (1n << 256n) / (target + 1n) : 0n;
@@ -487,6 +491,40 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     });
   }
 
+  // --- Fork #3 emergency difficulty-repair banner (dismissible) ---
+  // Its own storage key: reusing the fork-#2 key would hide this from everyone
+  // who dismissed that banner — i.e. exactly the long-lived tabs that most need
+  // to see the repair confirmation. This banner only exists in the patched
+  // bundle, so its presence tells the user their reload landed on the fixed
+  // client (that is the point) — it stays until they dismiss it.
+  const FORK3_BANNER_KEY = 'browsercoin:fork3-repair-banner-dismissed';
+  let fork3Timer: ReturnType<typeof setInterval> | undefined;
+  const fork3Banner = view.querySelector<HTMLElement>('[data-w="fork3Banner"]');
+  const fork3BannerText = view.querySelector<HTMLElement>('[data-w="fork3BannerText"]');
+  const fork3Dismissed = (() => {
+    try { return localStorage.getItem(FORK3_BANNER_KEY) === '1'; } catch { return false; }
+  })();
+  if (fork3Banner && fork3BannerText && !fork3Dismissed) {
+    view.querySelector('[data-slot="fork3Info"]')?.appendChild(infoButton({
+      title: 'The difficulty repair (fork #3)',
+      body: `A bug in the previous mining upgrade left difficulty pinned against a safety clamp, and when that clamp expires at block ${SANDGLASS2_ANCHOR_HEIGHT.toLocaleString()} the old rules would make the chain unmineable and stall it.\n\nThis release fixes it: from that block on, difficulty simply follows the network's speed again (plain ASERT, re-anchored on the real block), with no clamp and nothing hard-coded. Your balance, history and coins are untouched — only the difficulty rule changes, and only at/after that height.\n\nYou don't need to do anything else. Seeing this banner means your tab is already on the fixed client. Non-updated tabs will stop being able to mine at the fork block until they reload.`,
+    }));
+    const updateFork3Banner = (): void => {
+      const s = fork3Status(node.chain.height);
+      fork3BannerText.innerHTML = s.activated
+        ? `<b>${s.line}</b> You're all set — nothing to do.`
+        : `<b>${s.line}</b> You're on the updated client; just keep this tab open.`;
+    };
+    updateFork3Banner();
+    fork3Banner.hidden = false;
+    fork3Timer = setInterval(updateFork3Banner, 1000);
+    view.querySelector('[data-w="fork3Close"]')?.addEventListener('click', () => {
+      fork3Banner.hidden = true;
+      if (fork3Timer) { clearInterval(fork3Timer); fork3Timer = undefined; }
+      try { localStorage.setItem(FORK3_BANNER_KEY, '1'); } catch { /* storage unavailable */ }
+    });
+  }
+
   refresh();
   refreshMiner();
 
@@ -518,6 +556,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     unsubSync();
     clearInterval(ticker);
     if (forkTimer) clearInterval(forkTimer);
+    if (fork3Timer) clearInterval(fork3Timer);
   };
 }
 

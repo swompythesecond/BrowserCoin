@@ -1,7 +1,6 @@
 import type { Blockchain } from '../chain/blockchain.js';
 import { computeTxRoot, encodeHeader, type Block, type BlockHeader } from '../chain/block.js';
-import { nextDifficulty } from '../chain/consensus.js';
-import { DIFFICULTY_WINDOW, MAX_BLOCK_BYTES, MTP_WINDOW } from '../chain/genesis.js';
+import { MAX_BLOCK_BYTES } from '../chain/genesis.js';
 import type { Mempool } from '../chain/mempool.js';
 import { applyBlockTxs, cloneState, stateRoot } from '../chain/state.js';
 import { compactToTarget } from '../util/binary.js';
@@ -423,13 +422,7 @@ export class MinerController {
 
   private refreshTemplateIfDifficultyChanged(): void {
     if (!this.currentTemplate) return;
-    const parent = this.chain.tip.block.header;
-    const recent = this.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
-    const liveDiff = nextDifficulty(
-      parent.height + 1,
-      recent,
-      Math.floor(Date.now() / 1000),
-    );
+    const liveDiff = this.chain.expectedNextDifficulty(Math.floor(Date.now() / 1000));
     if (liveDiff !== this.currentTemplate.block.header.difficulty) {
       this.restartTemplate();
     }
@@ -572,9 +565,8 @@ export class MinerController {
 
     const parent = this.chain.tip.block.header;
     const height = parent.height + 1;
-    const recent = this.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
     const timestamp = Math.floor(Date.now() / 1000);
-    const difficulty = nextDifficulty(height, recent, timestamp);
+    const difficulty = this.chain.expectedNextDifficulty(timestamp);
 
     // Reserve a safety margin under the block-size cap.
     const budget = MAX_BLOCK_BYTES - 1024;

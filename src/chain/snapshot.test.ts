@@ -69,7 +69,7 @@ async function mineWithStateRoot(chain: Blockchain, miner: Uint8Array, sr: Uint8
   const difficulty = nextDifficulty(
     height,
     chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1),
-    timestamp,
+    timestamp, null,
   );
   const base: BlockHeader = {
     height,

@@ -7,6 +7,7 @@ import { forkActivationTime } from '../chain/fork.js';
 import {
   SANDGLASS_FORK_HEIGHT,
   SANDGLASS_ANCHOR_TIMESTAMP,
+  SANDGLASS2_ANCHOR_HEIGHT,
   TARGET_BLOCK_TIME_S,
 } from '../chain/genesis.js';
 
@@ -76,4 +77,42 @@ export function sandglassCountdown(currentHeight: number): SandglassCountdown {
 /** Announced Sandglass activation date (UTC) for display. */
 export function sandglassActivationDateUTC(): string {
   return new Date(SANDGLASS_ANCHOR_TIMESTAMP * 1000).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+}
+
+// ─── Fork #3: emergency difficulty repair (height-gated) ────────────────────
+
+export interface Fork3Status {
+  /** True once the chain has passed the anchor and the repair is live. */
+  activated: boolean;
+  blocksRemaining: number;
+  line: string;
+}
+
+/**
+ * Status of the fork-#3 difficulty repair, which re-anchors ASERT on the real
+ * header of block SANDGLASS2_ANCHOR_HEIGHT so the chain can't stall at the
+ * fork-#2 clamp-expiry. This is presentational only — activation is by height in
+ * consensus, never by this readout.
+ *
+ * The banner that renders this only exists in the patched bundle, so its mere
+ * presence tells a user their reload landed on the fixed client — that is the
+ * primary job here, more than the countdown itself.
+ */
+export function fork3Status(currentHeight: number): Fork3Status {
+  const remaining = SANDGLASS2_ANCHOR_HEIGHT - currentHeight;
+  if (remaining <= 0) {
+    return {
+      activated: true,
+      blocksRemaining: 0,
+      line: `Emergency hardfork LIVE — this client is on the corrected chain.`,
+    };
+  }
+  // Blocks only, no time estimate: the chain is running well off the 150s target
+  // pace right now (that mismatch is the bug), so any wall-clock ETA would be
+  // wrong. The block count is exact.
+  return {
+    activated: false,
+    blocksRemaining: remaining,
+    line: `Emergency hardfork to fix the difficulty bug in ${remaining.toLocaleString()} blocks (at block ${SANDGLASS2_ANCHOR_HEIGHT.toLocaleString()}).`,
+  };
 }

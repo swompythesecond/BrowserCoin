@@ -10,8 +10,8 @@
  * after the genesis-timestamp constant was set.
  */
 import { hashHeader, computeTxRoot, type Block, type BlockHeader } from './block.js';
-import { checkPoW, nextDifficulty } from './consensus.js';
-import { DIFFICULTY_WINDOW, GENESIS_TIMESTAMP, MTP_WINDOW, TARGET_BLOCK_TIME_S } from './genesis.js';
+import { checkPoW } from './consensus.js';
+import { GENESIS_TIMESTAMP, TARGET_BLOCK_TIME_S } from './genesis.js';
 import { applyBlockTxs, cloneState, stateRoot, type State } from './state.js';
 import type { Transaction } from './transaction.js';
 import type { Blockchain } from './blockchain.js';
@@ -34,11 +34,7 @@ export async function buildBlock(
     : parent.timestamp + TARGET_BLOCK_TIME_S;
   const timestamp = timestampOverride ?? defaultTimestamp;
 
-  const difficulty = nextDifficulty(
-    height,
-    chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1),
-    timestamp,
-  );
+  const difficulty = chain.expectedNextDifficulty(timestamp);
 
   const scriptCtx = chain.nextBlockScriptContext();
   const sim = cloneState(chain.tipState);

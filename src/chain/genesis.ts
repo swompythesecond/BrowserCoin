@@ -232,3 +232,52 @@ export const SANDGLASS_ANCHOR_CLAMP_BLOCKS = 2000;
 // within ~10-30 min; too-hard risks a slow-block stall. 5,000,000 ≈ ~33 kH/s of
 // honest miners; raise it if you expect more, lower it if fewer.
 export const SANDGLASS_ANCHOR_ATTEMPTS = 5_000_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fork #3 — difficulty repair.
+//
+// WHAT WENT WRONG. Fork #2 re-anchored ASERT at a HARDCODED GUESS of when the
+// chain would reach SANDGLASS_FORK_HEIGHT (SANDGLASS_ANCHOR_TIMESTAMP, written
+// three days early). Anchor-ASERT amplifies anchor-time error exponentially, so
+// a wrong guess meant an instant difficulty explosion — and to contain that,
+// SANDGLASS_ANCHOR_CLAMP_BLOCKS bounded the resulting TARGET for 2000 blocks.
+// That clamp is the bug. Anchor-ASERT derives its target from the TOTAL drift
+// accumulated since the anchor: it is an integrator. Bounding its output while
+// the drift keeps accumulating behind it is textbook integral windup. Live
+// numbers: the reset landed ~10x too easy, difficulty pinned at the clamp
+// ceiling (4x reset) from block ~33,600 on, blocks ran ~60s instead of 150s, and
+// the drift wound up to −12.4 h by height 34,039 — an unclamped demand of ~2.6e22x
+// the reset difficulty. At SANDGLASS_FORK_HEIGHT + CLAMP_BLOCKS the clamp expires
+// and that entire accumulated error discharges in one retarget, making the next
+// block unmineable. The emergency drop cannot rescue it: its grandparent gate
+// reads frozen history that no future candidate can change. Permanent stall.
+//
+// THE FIX. Not a new mechanism — the removal of one. From
+// SANDGLASS2_ANCHOR_HEIGHT + 1 on, difficulty is plain, unbounded ASERT
+// re-anchored on the REAL header of block SANDGLASS2_ANCHOR_HEIGHT: its actual
+// mined timestamp AND its actual difficulty, both read from the chain, neither
+// guessed. That is exactly what makes the genesis anchor safe (it held 149.2
+// s/block over 33k blocks), and it is the property fork #2 threw away. With a
+// truthful anchor there is nothing to contain, so there is no clamp, no settling
+// band, no expiry, and therefore no cliff — difficulty simply tracks hashrate
+// however volatile it gets.
+//
+// The height below is the ONLY constant this fork introduces. There is
+// deliberately no reset difficulty: fork #2 had one because it switched PoW
+// algorithms and the old difficulty was meaningless in the new units; nothing
+// changes here, so the anchor block's own difficulty carries over and ASERT
+// takes it from there. A starting point that is 2-3x off target is what ASERT
+// exists to fix, and it does so within ~10-30 min. Note the anchor difficulty is
+// forced by consensus, not chosen by its miner, so there is no grinding vector;
+// its timestamp is miner-influenced only within MAX_FUTURE_TIME_S, and any such
+// offset is absorbed into the steady-state drift rather than biasing the pace.
+//
+// NOTE: the fork-#2 path in nextDifficulty (reset + re-anchor + clamp) must stay
+// exactly as-is forever. Heights 33,550..35,550 were mined under it and have to
+// keep validating on resync. It is history, not live code.
+//
+// ANCHOR HEIGHT = the last block the old rules can still produce. Blocks at or
+// below it are byte-for-byte unchanged, so there is no divergence before the
+// boundary and no split: the old chain simply halts here on its own, with or
+// without this fork.
+export const SANDGLASS2_ANCHOR_HEIGHT = 35_550;

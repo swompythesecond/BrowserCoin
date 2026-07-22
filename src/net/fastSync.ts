@@ -38,7 +38,7 @@ import {
   type Block,
   type BlockHeader,
 } from '../chain/block.js';
-import { GENESIS, MAX_FUTURE_TIME_S, MTP_WINDOW } from '../chain/genesis.js';
+import { GENESIS, MAX_FUTURE_TIME_S, MTP_WINDOW, SANDGLASS2_ANCHOR_HEIGHT } from '../chain/genesis.js';
 import { medianTimePast, nextDifficulty } from '../chain/consensus.js';
 import { deserializeState, stateRoot, type LockRow, type StateRow } from '../chain/state.js';
 import { bytesToHex, compareBytes, hexToBytes } from '../util/binary.js';
@@ -179,6 +179,11 @@ export async function attemptFastSync(
   const hashes: Uint8Array[] = [];
   let prevHash = hashHeader(GENESIS.header);
   const window: BlockHeader[] = [GENESIS.header];
+  // Fork-#3 ASERT anchor. The rolling MTP window is far too short to still hold
+  // it once we're past SANDGLASS2_ANCHOR_HEIGHT + RETARGET_LOOKBACK, so capture
+  // it as we walk by. We verify strictly height-ascending from 1, so it is
+  // always in hand before the first block that needs it.
+  let sandglass2Anchor: BlockHeader | null = null;
   const now = Math.floor(Date.now() / 1000);
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i]!;
@@ -186,7 +191,7 @@ export async function attemptFastSync(
     if (compareBytes(h.prevHash, prevHash) !== 0) {
       return { status: 'failed', reason: `header linkage broken at height ${h.height}`, retryable: false };
     }
-    if (h.difficulty !== nextDifficulty(h.height, window, h.timestamp)) {
+    if (h.difficulty !== nextDifficulty(h.height, window, h.timestamp, sandglass2Anchor)) {
       return { status: 'failed', reason: `difficulty schedule violated at height ${h.height}`, retryable: false };
     }
     const mtp = medianTimePast(window);
@@ -196,6 +201,7 @@ export async function attemptFastSync(
     if (h.timestamp > now + MAX_FUTURE_TIME_S) {
       return { status: 'failed', reason: `timestamp too far in future at height ${h.height}`, retryable: false };
     }
+    if (h.height === SANDGLASS2_ANCHOR_HEIGHT) sandglass2Anchor = h;
     prevHash = hashHeader(h);
     hashes.push(prevHash);
     window.push(h);

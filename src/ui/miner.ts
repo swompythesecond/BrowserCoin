@@ -1,8 +1,7 @@
 import { maxMinerWorkers } from '../miner/controller.js';
 import type { Node } from '../node.js';
 import { formatAmount } from '../node.js';
-import { nextDifficulty } from '../chain/consensus.js';
-import { DIFFICULTY_WINDOW, MTP_WINDOW, SANDGLASS_FORK_HEIGHT, blockReward } from '../chain/genesis.js';
+import { SANDGLASS_FORK_HEIGHT, blockReward } from '../chain/genesis.js';
 import { compactToTarget } from '../util/binary.js';
 import { bytesToHex } from '../util/binary.js';
 import { TICKER } from '../brand.js';
@@ -528,8 +527,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     if (s.running && s.currentDifficulty !== null) {
       diff = s.currentDifficulty;
     } else {
-      const headers = node.chain.getRecentHeaders(DIFFICULTY_WINDOW + MTP_WINDOW - 1);
-      diff = nextDifficulty(nextHeight, headers, Math.floor(Date.now() / 1000));
+      diff = node.chain.expectedNextDifficulty(Math.floor(Date.now() / 1000));
     }
     const target = compactToTarget(diff);
     const bits = target <= 0n ? 256 : 256 - target.toString(2).length;
