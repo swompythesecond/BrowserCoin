@@ -381,6 +381,13 @@ export class Node {
           `[node] restored to tip h=${this.chain.height}${usedSnapshot ? ' (snapshot fast-path)' : ''}`,
         );
         this.emitChain();
+      } else {
+        // Had blocks on disk but restored nothing — every one was orphaned. The
+        // tab is about to re-download the whole chain, so say so rather than
+        // silently bootstrapping and leaving the user to guess why.
+        console.warn(
+          `[node] restore recovered 0 blocks from ${stored.length} stored — prefix unreachable; re-syncing from the network`,
+        );
       }
     } catch (e) {
       console.warn('[node] idb restore failed:', (e as Error).message);
@@ -518,12 +525,31 @@ export class Node {
    * Persist the account state at a finalized block (SNAPSHOT_DEPTH below the tip)
    * so the next page load can skip replaying the finalized prefix. Best-effort:
    * any failure just leaves the previous snapshot (or none) in place.
+   *
+   * Pinned to the anchor while a fast-synced header prefix is still in play —
+   * see the `headerChain` guard below.
    */
   private async writeSnapshot(): Promise<void> {
     try {
       const finalizedHeight = this.chain.height - SNAPSHOT_DEPTH;
       if (finalizedHeight <= 0) return; // chain too short to finalize anything
       if (finalizedHeight === this.lastSnapshotHeight) return; // unchanged since last write
+
+      // A fast-synced tab has no full blocks below its anchor; the ONLY thing
+      // that can rebuild that prefix is the `headerChain` blob, and the sole
+      // path that reads it (replayWithHeaderChain) requires the snapshot to sit
+      // exactly ON the anchor. Advancing past the anchor therefore strands the
+      // blob: restore falls through to replayWithSnapshot, which throws
+      // 'parent block unknown' because the prefix was never seeded, and the tab
+      // re-bootstraps the whole chain from the network. That took ~SNAPSHOT_DEPTH
+      // blocks (~4 h) after any fast sync, and recurred on every later refresh.
+      // So hold the snapshot at the anchor until backfill completes and deletes
+      // the blob, after which this resumes tracking the tip normally.
+      const hc = await getMeta<HeaderChainMeta>('headerChain');
+      if (hc && hc.v === 1 && hc.chainVersion === CHAIN_VERSION && finalizedHeight > hc.anchorHeight) {
+        return;
+      }
+
       const at = this.chain.snapshotAt(finalizedHeight);
       if (!at) return; // target not reached or not materialized
       const snap: StateSnapshot = {
