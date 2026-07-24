@@ -232,16 +232,40 @@ async function loadHelperRecordsFromDisk(): Promise<void> {
   }
 }
 
+/**
+ * Per-block encoded-hex cache, keyed by header-hash hex. A block's serialized
+ * form never changes once mined, so re-encoding the whole chain on every flush
+ * was pure repeated work: at ~36k blocks, `bytesToHex(encodeBlock(...))` across
+ * the chain cost ~2.5 s of *synchronous* CPU, and flushChainIfDirty runs every
+ * SAVE_INTERVAL_MS with miners active — freezing the event loop ~1/3 of the
+ * time (O(1) endpoints like /tip measured 8-15 s). With the cache each block is
+ * encoded exactly once; steady-state serialize drops to ~250 ms (just the walk
+ * + JSON.stringify). See serializeChain.
+ */
+let blockHexCache = new Map<string, string>();
+
 /** Serialize the canonical chain (excluding genesis) to the on-disk JSON shape. */
 function serializeChain(): string {
   // iterateCanonical yields tip-first (descending height). Collect with push
   // then reverse to get genesis-first — O(n). The old unshift-per-block made
   // this O(n²), which on a 20k+ block chain took long enough to stall the
   // event loop on every save.
+  //
+  // Rebuild the hex cache fresh each pass, reusing encoded strings for blocks
+  // still on the canonical chain. Building a new map (rather than mutating the
+  // old one) means reorg-displaced blocks fall out automatically, so the cache
+  // stays bounded to the canonical set instead of leaking stale forks forever.
+  const nextCache = new Map<string, string>();
   const blocks: string[] = [];
   for (const cb of chain.iterateCanonical()) {
-    if (cb.block.header.height > 0) blocks.push(bytesToHex(encodeBlock(cb.block)));
+    if (cb.block.header.height === 0) continue;
+    const key = bytesToHex(cb.hash);
+    let hex = blockHexCache.get(key);
+    if (hex === undefined) hex = bytesToHex(encodeBlock(cb.block));
+    nextCache.set(key, hex);
+    blocks.push(hex);
   }
+  blockHexCache = nextCache;
   blocks.reverse();
   return JSON.stringify({ version: 1, chainVersion: CHAIN_VERSION, blocks });
 }
