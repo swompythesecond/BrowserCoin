@@ -33,7 +33,7 @@ import { gzipSync } from 'node:zlib';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { Blockchain } from '../src/chain/blockchain.js';
+import { Blockchain, type ChainBlock } from '../src/chain/blockchain.js';
 import { decodeBlock, encodeBlock, encodeHeader, hashHeader, type Block } from '../src/chain/block.js';
 import { bytesToHex, hexToBytes } from '../src/util/binary.js';
 import { Mempool } from '../src/chain/mempool.js';
@@ -268,6 +268,48 @@ function serializeChain(): string {
   blockHexCache = nextCache;
   blocks.reverse();
   return JSON.stringify({ version: 1, chainVersion: CHAIN_VERSION, blocks });
+}
+
+// ─── Canonical read index ────────────────────────────────────────────────────
+// GET /blocks and /headers serve a height window [fromHeight, fromHeight+max).
+// chain.iterateCanonical() walks tip→genesis, so serving a *low* window meant
+// skipping every block from the tip down to it — ~31k Map-lookups +
+// bytesToHex(prevHash) allocations per request at h≈36k, purely to reach the
+// window. With initial-sync clients hammering /blocks at low fromHeight this
+// pegged one core at 100% continuously (reads outnumber block submissions
+// ~50:1), and it worsened as the chain grew.
+//
+// Keep a height-indexed snapshot of the canonical chain (index === height,
+// genesis at 0) so a read jumps straight to its window. Rebuilt only when the
+// tip actually moves — with an O(1) fast-path for the common single-block
+// extension — and it holds ChainBlock *references* (no copies), so the extra
+// memory is one pointer per block.
+let canonicalIndex: ChainBlock[] | null = null;
+let canonicalIndexTipHex = '';
+
+function getCanonicalIndex(): ChainBlock[] {
+  const tipHex = bytesToHex(chain.tip.hash);
+  if (canonicalIndex && canonicalIndexTipHex === tipHex) return canonicalIndex;
+  // Fast-path: the tip advanced by one block on top of the block we already
+  // hold as the array's last element (the overwhelmingly common case — a plain
+  // extension). Just append; no full walk.
+  if (
+    canonicalIndex &&
+    canonicalIndex.length > 0 &&
+    bytesToHex(chain.tip.block.header.prevHash) === canonicalIndexTipHex
+  ) {
+    canonicalIndex.push(chain.tip);
+    canonicalIndexTipHex = tipHex;
+    return canonicalIndex;
+  }
+  // Full rebuild (first read, reorg, or multi-block jump). O(n) once per such
+  // tip move, then amortized across every read until the next move.
+  const arr: ChainBlock[] = [];
+  for (const cb of chain.iterateCanonical()) arr.push(cb);
+  arr.reverse(); // iterateCanonical is tip-first; we want index === height
+  canonicalIndex = arr;
+  canonicalIndexTipHex = tipHex;
+  return arr;
 }
 
 async function saveChainToDiskNow(): Promise<void> {
@@ -597,22 +639,20 @@ app.get('/tip', cheapLimiter, (_req, res) => {
 });
 
 app.get('/blocks', readHeavyLimiter, (req, res) => {
-  const fromHeight = Math.max(0, Number(req.query.fromHeight ?? 0));
+  const fromHeight = Math.max(0, Number(req.query.fromHeight ?? 0) || 0);
   const max = Math.max(1, Math.min(200, Number(req.query.max ?? 100)));
   const upper = fromHeight + max; // exclusive upper bound of the returned window
-  // Canonical walk is tip-first (descending height). Only encode the
-  // [fromHeight, fromHeight+max) window instead of the whole chain, and push +
-  // reverse for oldest-first ordering. Previously this encoded every block from
-  // the tip down to fromHeight and unshifted each (O(n²)) just to slice off
-  // `max` — a big event-loop stall on long chains and low fromHeight.
+  // Index straight into the height-keyed canonical snapshot and encode only the
+  // requested window (≤200 blocks). Previously this walked the chain tip-first,
+  // skipping every block above the window — O(chain height) per request, which
+  // pegged the event loop once initial-sync clients requested low fromHeight on
+  // a long chain. See getCanonicalIndex.
+  const arr = getCanonicalIndex();
+  const hi = Math.min(arr.length - 1, upper - 1); // last height in the window
   const blocks: string[] = [];
-  for (const cb of chain.iterateCanonical()) {
-    const h = cb.block.header.height;
-    if (h >= upper) continue;
-    if (h < fromHeight) break;
-    blocks.push(bytesToHex(encodeBlock(cb.block)));
+  for (let h = fromHeight; h <= hi; h++) {
+    blocks.push(bytesToHex(encodeBlock(arr[h]!.block)));
   }
-  blocks.reverse();
   res.json({ blocks });
 });
 
@@ -621,17 +661,17 @@ app.get('/headers', readHeavyLimiter, (req, res) => {
   // (148 bytes per header) — decoded client-side with decodeHeader(buf, i*148).
   // Genesis (height 0) is never served: clients hardcode it and verify header
   // 1's prevHash against it. Same windowed walk as /blocks above.
-  const fromHeight = Math.max(1, Number(req.query.fromHeight ?? 1));
+  const fromHeight = Math.max(1, Number(req.query.fromHeight ?? 1) || 1);
   const max = Math.max(1, Math.min(HEADERS_MAX, Number(req.query.max ?? HEADERS_MAX)));
   const upper = fromHeight + max; // exclusive
+  // Same height-indexed lookup as /blocks — jump to the window instead of
+  // walking down from the tip.
+  const arr = getCanonicalIndex();
+  const hi = Math.min(arr.length - 1, upper - 1);
   const parts: string[] = [];
-  for (const cb of chain.iterateCanonical()) {
-    const h = cb.block.header.height;
-    if (h >= upper) continue;
-    if (h < fromHeight) break;
-    parts.push(bytesToHex(encodeHeader(cb.block.header)));
+  for (let h = fromHeight; h <= hi; h++) {
+    parts.push(bytesToHex(encodeHeader(arr[h]!.block.header)));
   }
-  parts.reverse();
   res.json({ v: 1, fromHeight, count: parts.length, headers: parts.join('') });
 });
 
