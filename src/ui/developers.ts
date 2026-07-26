@@ -112,9 +112,72 @@ export function mountDevelopers(host: HTMLElement): () => void {
 
       <h3>Proof-of-Work</h3>
       <p>
-        Memory-hard Argon2id over the 148-byte header. A header is valid when
-        the hash, interpreted as a big-endian uint256, is less than the
-        compact target.
+        A header is valid when its PoW hash, interpreted as a big-endian
+        uint256, is less than the target decoded from the header's compact
+        <code>difficulty</code> field. Which hash function applies is gated on
+        the header's own <code>height</code> (its first 4 bytes, u32be), so a
+        verifier needs nothing but the header to pick the right one:
+      </p>
+      <table>
+        <thead><tr><th>Height</th><th>Algorithm</th></tr></thead>
+        <tbody>
+          <tr><td>0 – 33,549</td><td>Argon2id — legacy, still required to re-verify history</td></tr>
+          <tr><td>33,550 and above</td><td><strong>Sandglass v3</strong> — current (fork #2)</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Sandglass v3 (current)</h4>
+      <p>
+        Memory-<em>latency</em>-hard: a 512 KiB buffer walked by a long chain of
+        dependent random reads. Uses only <code>Math.imul</code>-equivalent
+        32-bit multiplies, uint32 arithmetic, and SHA-256, so it is bit-exact
+        across languages and engines. All arithmetic is mod 2³², all buffer
+        indices are <code>&amp; 0x1FFFF</code>.
+      </p>
+      <pre><code>mix(x):                        // lowbias32
+  x ^= x >>> 16;  x = (x * 0x7feb352d) mod 2^32
+  x ^= x >>> 15;  x = (x * 0x846ca68b) mod 2^32
+  x ^= x >>> 16;  return x
+
+W = 131072 (u32 words = 512 KiB)   GOLDEN = 0x9e3779b9
+seed = sha256(header)              // 32 bytes
+sw[0..7] = seed as 8 × u32be
+
+// 1. fill — chained, one seed word injected per step
+h = mix(sw[0] ^ GOLDEN)
+for i in 0..W-1:
+    h = mix(h + GOLDEN + sw[i & 7]);  buf[i] = h
+
+// 2. init 4 chains from h
+x = h
+for c in 0..3:
+    x  = mix(x ^ (c+1))
+    a[c] = mix(x ^ GOLDEN)
+    i[c] = x & (W-1)
+
+// 3. walk — 4 interleaved dependent read-modify-writes, 524288 steps each
+for s in 0..524287:
+    for c in 0..3:
+        a[c] = mix(a[c] ^ buf[i[c]])
+        buf[i[c]] = (a[c] + s) mod 2^32
+        i[c] = a[c] & (W-1)
+
+// 4. finalize
+fin = seed ‖ u32be(h) ‖ u32be(a0) ‖ u32be(a1) ‖ u32be(a2) ‖ u32be(a3)   // 52 bytes
+powHash = sha256(fin)</code></pre>
+      <p>
+        Note the chains are stepped in lockstep (all four advance one step per
+        iteration <code>s</code>, and <code>s</code> is mixed into every store) —
+        running one chain to completion before the next produces a different
+        digest. Frozen test vectors live at
+        <a href="https://github.com/swompythesecond/BrowserCoin/blob/main/src/crypto/sandglass.vectors.json" target="_blank" rel="noopener noreferrer">src/crypto/sandglass.vectors.json</a>;
+        any independent implementation must reproduce them exactly.
+      </p>
+
+      <h4>Argon2id (legacy, height &lt; 33,550)</h4>
+      <p>
+        Required only to re-verify pre-fork history. Password is the 148-byte
+        header; output is compared against the target the same way.
       </p>
       <table>
         <tbody>
@@ -123,7 +186,7 @@ export function mountDevelopers(host: HTMLElement): () => void {
           <tr><td>Iterations</td><td>1</td></tr>
           <tr><td>Parallelism</td><td>1</td></tr>
           <tr><td>Output length</td><td>32 bytes</td></tr>
-          <tr><td>Salt</td><td>UTF-8 of the literal string <code>browsercoin-pow-v2</code></td></tr>
+          <tr><td>Salt</td><td>UTF-8 of the literal string <code>browsercoin-pow-v5</code></td></tr>
         </tbody>
       </table>
 

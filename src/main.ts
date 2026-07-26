@@ -105,7 +105,7 @@ router
   .route('/explorer', (host, params) => mountExplorer(host, node, params, router))
   .route('/scripts',  (host) => mountScripts(host, node))
   .route('/mempool',  (host) => mountMempool(host, node))
-  .route('/about',    (host) => mountAbout(host))
+  .route('/about',    (host, params) => mountAbout(host, params, router))
   .route('/highlights', (host) => mountHighlights(host))
   .route('/developers', (host) => mountDevelopers(host))
   .route('/settings', (host) => mountSettings(host, node))
