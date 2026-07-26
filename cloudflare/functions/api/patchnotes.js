@@ -44,7 +44,13 @@ export async function onRequestGet(context) {
   const channelId = env.DISCORD_CHANNEL_ID;
 
   if (!token || !channelId) {
-    return json({ ok: false, reason: 'unconfigured', entries: [] });
+    // Name the missing variable(s). Reporting only "unconfigured" turns a typo
+    // or a Preview-vs-Production mixup into a guessing game. Presence booleans
+    // only — never echo the values back.
+    const missing = [];
+    if (!token) missing.push('DISCORD_BOT_TOKEN');
+    if (!channelId) missing.push('DISCORD_CHANNEL_ID');
+    return json({ ok: false, reason: 'unconfigured', missing, entries: [] });
   }
 
   // Serve from the edge cache when warm.
