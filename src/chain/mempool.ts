@@ -28,7 +28,7 @@ export interface SelectScriptContext {
   blockMtp: number;
 }
 
-/** Per-tx entry — keyed by tx hash hex. */
+/** Per-tx entry, keyed by tx hash hex. */
 interface MempoolEntry {
   tx: Transaction;
   hashHex: string;
@@ -63,7 +63,7 @@ export class Mempool {
     return this.entries.get(hashHex)?.tx;
   }
 
-  /** Hash hexes of every pooled tx — used for `inv`-style hash announcements. */
+  /** Hash hexes of every pooled tx, used for `inv`-style hash announcements. */
   hashes(): string[] {
     return [...this.entries.keys()];
   }
@@ -317,7 +317,7 @@ export class Mempool {
     return [...this.entries.values()].map((e) => e.tx);
   }
 
-  /** Like `list()` but also exposes when each tx hit the pool — used by the UI. */
+  /** Like `list()` but also exposes when each tx hit the pool, used by the UI. */
   listEntries(): Array<{ tx: Transaction; receivedAt: number; feePerByte: bigint }> {
     return [...this.entries.values()].map((e) => ({
       tx: e.tx,

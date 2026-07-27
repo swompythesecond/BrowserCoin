@@ -24,7 +24,7 @@ function op(name: string, value: number, desc: string): OpcodeDoc {
 export const OPCODE_REFERENCE: OpcodeGroup[] = [
   {
     title: 'Pushing data',
-    note: 'Bytes 0x01–0x4b are not named opcodes — each pushes that many literal bytes onto the stack.',
+    note: 'Bytes 0x01–0x4b are not named opcodes, each pushes that many literal bytes onto the stack.',
     ops: [
       op('OP_0', Op.OP_0, 'Push an empty value (also the canonical "false").'),
       op('OP_1…OP_16', Op.OP_1, 'Push the small integer 1 through 16 (0x51…0x60).'),

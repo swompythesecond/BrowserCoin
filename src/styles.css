@@ -791,6 +791,14 @@ label {
 
 /* ---- Changelog (Discord mirror) ---- */
 .changelog-intro { color: var(--muted); font-size: 0.9rem; margin-bottom: 22px; }
+
+/* Discord posts contain pasted URLs and hashes with no spaces in them. Those
+   cannot wrap on their own and would push the card past the viewport, so allow
+   breaking inside a word here. `anywhere` on links only, since it is ugly on
+   ordinary prose. */
+.about-body { overflow-wrap: break-word; }
+.changelog-entry a,
+.changelog-entry code { overflow-wrap: anywhere; }
 .changelog-entry {
   border-top: 1px solid var(--border);
   padding-top: 18px;

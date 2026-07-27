@@ -93,7 +93,7 @@ export type ValidationError = string;
 export class Blockchain {
   /** All known valid blocks, by hex header hash. */
   private blocks = new Map<string, ChainBlock>();
-  /** The chain tip — the block with the highest cumulative work. */
+  /** The chain tip, the block with the highest cumulative work. */
   private tipHash!: string;
   /**
    * Hex hashes of every block at a height, across all branches. Lets the state
@@ -262,7 +262,7 @@ export class Blockchain {
     return this.tip.block.header.height;
   }
 
-  /** State at the chain tip — do NOT mutate. The tip is always materialized. */
+  /** State at the chain tip, do NOT mutate. The tip is always materialized. */
   get tipState(): State {
     const s = this.tip.state;
     if (s === null) throw new Error('tip state not materialized'); // invariant violation
@@ -675,7 +675,7 @@ export class Blockchain {
     return bytesToHex(hashHeader(header));
   }
 
-  /** Pre-image hash for the header without nonce mutation — handy for the miner. */
+  /** Pre-image hash for the header without nonce mutation, handy for the miner. */
   static headerBytes(header: BlockHeader): Uint8Array {
     return encodeHeader(header);
   }

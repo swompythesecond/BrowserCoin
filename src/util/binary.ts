@@ -1,4 +1,4 @@
-/** Hex / binary helpers — small, dependency-free. */
+/** Hex / binary helpers, small, dependency-free. */
 
 const HEX_CHARS = '0123456789abcdef';
 
@@ -74,7 +74,7 @@ export function readU64be(b: Uint8Array, off: number): bigint {
   return n;
 }
 
-/** Compact difficulty: 4-byte (exponent, 3-byte mantissa) — similar idea to Bitcoin's "bits". */
+/** Compact difficulty: 4-byte (exponent, 3-byte mantissa), similar idea to Bitcoin's "bits". */
 export function compactToTarget(compact: number): bigint {
   const exp = (compact >>> 24) & 0xff;
   const mant = BigInt(compact & 0x00ff_ffff);

@@ -88,11 +88,11 @@ export interface FastSyncDeps {
   servers: string[];
   /** Injected fetch (ServerSync's fetchWithTimeout; a stub in tests). */
   fetchImpl: (url: string) => Promise<Response>;
-  /** Argon2id verifier — VerifierPool in production, checkPoW-based in tests. */
+  /** Argon2id verifier, VerifierPool in production, checkPoW-based in tests. */
   verifier: { verifyAll(blocks: Block[]): Promise<boolean[]> };
   onProgress?: (p: FastSyncProgress) => void;
   persist?: (data: FastSyncPersistData) => Promise<void>;
-  /** Random height picker for PoW sampling — injectable for deterministic tests. */
+  /** Random height picker for PoW sampling, injectable for deterministic tests. */
   sampler?: (maxExclusive: number) => number;
 }
 
@@ -230,7 +230,7 @@ export async function attemptFastSync(
         const v = (await r.json()) as { height: number; tipHash: string };
         responses++;
         if (recentHashes.has(v.tipHash) || v.height >= topHeight) confirming++;
-      } catch { /* unreachable server — not a vote */ }
+      } catch { /* unreachable server, not a vote */ }
     }));
     if (responses >= 2 && confirming < 2) {
       return { status: 'failed', reason: 'tip cross-check failed (helpers disagree with fetched chain)', retryable: true };
@@ -312,7 +312,7 @@ async function fetchHeadersBatch(
     try {
       const r = await deps.fetchImpl(new URL(`/headers?fromHeight=${fromHeight}&max=${max}`, base).toString());
       if (r.status === 404 || r.status === 501) {
-        unsupported.add(base); // old build — skip for the session, no health penalty
+        unsupported.add(base); // old build, skip for the session, no health penalty
         continue;
       }
       if (!r.ok) {
@@ -358,7 +358,7 @@ async function fetchSnapshot(
         unsupported.add(base);
         continue;
       }
-      if (!r.ok) continue; // 503 = snapshot not built yet — try the next server
+      if (!r.ok) continue; // 503 = snapshot not built yet, try the next server
       const body = (await readJsonCapped(r, MAX_SNAPSHOT_BYTES)) as SnapshotWire;
       if (
         body?.v !== 1 ||
@@ -372,7 +372,7 @@ async function fetchSnapshot(
         continue;
       }
       if (body.height < 1 || body.height > topHeight || topHeight - body.height > FAST_SYNC_MAX_TAIL) {
-        continue; // stale or out-of-range snapshot — not this server's fault, just unusable
+        continue; // stale or out-of-range snapshot, not this server's fault, just unusable
       }
       if (body.hashHex !== bytesToHex(hashes[body.height - 1]!)) {
         noteFailure(base); // claims a block we've proven isn't canonical

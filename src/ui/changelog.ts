@@ -51,6 +51,19 @@ function link(href: string, text: string): string {
   return `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
 }
 
+/**
+ * Display text for a bare URL. A pasted Reddit or GitHub link runs well past the
+ * column width and, having no spaces, cannot wrap on its own, so it pushes the
+ * whole card sideways. Drop the protocol noise and cap the length; the href is
+ * untouched, so the link still goes exactly where it did.
+ */
+const URL_DISPLAY_MAX = 58;
+
+function prettyUrl(raw: string): string {
+  const bare = raw.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  return bare.length <= URL_DISPLAY_MAX ? bare : `${bare.slice(0, URL_DISPLAY_MAX - 1)}…`;
+}
+
 /** Inline formatting. Input is ALREADY html-escaped. */
 function renderInline(s: string): string {
   // Discord's own angle-bracket syntax, now escaped to &lt;…&gt;.
@@ -63,8 +76,9 @@ function renderInline(s: string): string {
   s = s.replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, (_m, u: string) => link(u, escapeHtml(u)));
 
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text: string, href: string) => link(href, text));
-  // Bare URLs, skipping any already inside an href="…" or >…</a>.
-  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_m, pre: string, u: string) => `${pre}${link(u, escapeHtml(u))}`);
+  // Bare URLs, skipping any already inside an href="…" or >…</a>. The visible
+  // text is shortened; the href always stays the full URL.
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_m, pre: string, u: string) => `${pre}${link(u, escapeHtml(prettyUrl(u)))}`);
 
   s = s.replace(/~~([\s\S]+?)~~/g, '<s>$1</s>');
   s = s.replace(/\*\*([\s\S]+?)\*\*/g, '<strong>$1</strong>');
@@ -198,6 +212,40 @@ function renderEntry(e: Entry): string {
   `;
 }
 
+/**
+ * Discord caps a message at 2000 characters, so a long announcement gets posted
+ * as several back-to-back messages. Those are one logical entry: consecutive
+ * messages by the same author within this window are stitched back together in
+ * chronological order. Without it the tail of a split post renders above its own
+ * beginning, because the feed is newest-first.
+ *
+ * Two minutes is deliberately tight. Split parts are pasted seconds apart, while
+ * two genuinely separate announcements are rarely that close, so this errs
+ * towards leaving posts alone.
+ */
+const MERGE_WINDOW_MS = 120_000;
+
+export function mergeSplitPosts(entries: Entry[]): Entry[] {
+  const out: Entry[] = [];
+  for (const e of entries) {
+    // `entries` is newest-first, so `prev` is the NEWER neighbour and `e` is the
+    // earlier part of a split post.
+    const prev = out[out.length - 1];
+    const gap = prev ? new Date(prev.timestamp).getTime() - new Date(e.timestamp).getTime() : Infinity;
+    if (prev && e.author && prev.author === e.author && gap >= 0 && gap <= MERGE_WINDOW_MS) {
+      out[out.length - 1] = {
+        ...e,
+        content: `${e.content}\n\n${prev.content}`,
+        attachments: [...e.attachments, ...prev.attachments],
+        pinned: e.pinned || prev.pinned,
+      };
+      continue;
+    }
+    out.push(e);
+  }
+  return out;
+}
+
 function fallbackCard(message: string): string {
   return `
     <div class="changelog-fallback">
@@ -238,7 +286,7 @@ export function renderChangelog(mount: HTMLElement): () => void {
         slot.outerHTML = fallbackCard('No patch notes have been posted yet.');
         return;
       }
-      slot.outerHTML = entries.map(renderEntry).join('');
+      slot.outerHTML = mergeSplitPosts(entries).map(renderEntry).join('');
     })
     .catch((err: unknown) => {
       if (err instanceof DOMException && err.name === 'AbortError') return;

@@ -59,7 +59,7 @@ export function importWalletJson(text: string): KeyPair {
   return kp;
 }
 
-/** Wipe the wallet — irreversible without an exported backup. */
+/** Wipe the wallet, irreversible without an exported backup. */
 export function deleteWallet(): void {
   localStorage.removeItem(WALLET_KEY);
 }

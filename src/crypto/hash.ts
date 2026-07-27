@@ -17,12 +17,12 @@ export function sha256d(data: Uint8Array): Uint8Array {
   return nobleSha256(nobleSha256(data));
 }
 
-/** RIPEMD-160 — used by the script opcodes OP_RIPEMD160 / OP_HASH160. */
+/** RIPEMD-160, used by the script opcodes OP_RIPEMD160 / OP_HASH160. */
 export function ripemd160(data: Uint8Array): Uint8Array {
   return nobleRipemd160(data);
 }
 
-/** HASH160 = RIPEMD160(SHA256(x)) — Bitcoin's address hash, used by OP_HASH160. */
+/** HASH160 = RIPEMD160(SHA256(x)), Bitcoin's address hash, used by OP_HASH160. */
 export function hash160(data: Uint8Array): Uint8Array {
   return nobleRipemd160(nobleSha256(data));
 }

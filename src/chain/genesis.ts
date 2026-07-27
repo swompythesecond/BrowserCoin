@@ -18,7 +18,7 @@ export const HALVING_INTERVAL = 210_000;
  */
 export const MAX_MONEY = 21_000_000n * COIN;
 
-/** Target one block every 2.5 minutes (150 s) — 4x faster than Bitcoin. */
+/** Target one block every 2.5 minutes (150 s), 4x faster than Bitcoin. */
 export const TARGET_BLOCK_TIME_S = 150;
 
 /**
@@ -118,7 +118,7 @@ export const MEMPOOL_TX_TTL_MS = 30 * 60 * 1000; // 30 min
  */
 export const GENESIS_DIFFICULTY_COMPACT = 0x20020000;
 
-/** Maximum hash value treated as "infinity" target — used in chain-work math. */
+/** Maximum hash value treated as "infinity" target, used in chain-work math. */
 export const MAX_TARGET = (1n << 256n) - 1n;
 
 /** Coinbase reward at a given height (account-model implicit coinbase). */
@@ -144,7 +144,7 @@ export const GENESIS: Block = {
     prevHash: new Uint8Array(32),
     txRoot: new Uint8Array(32),
     stateRoot: new Uint8Array(32),
-    timestamp: 1779700000, // ~2026-05-24 19:06 UTC — far enough in the past that test clocks and deploy clocks both run forward from it
+    timestamp: 1779700000, // ~2026-05-24 19:06 UTC, far enough in the past that test clocks and deploy clocks both run forward from it
     difficulty: GENESIS_DIFFICULTY_COMPACT,
     nonce: 0,
     miner: new Uint8Array(32),

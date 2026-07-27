@@ -96,11 +96,11 @@ const SYNC_BACKLOG_BLOCKS = 50;
 
 /** fastSyncNote shown while a deep backlog syncs with zero reachable helpers. */
 const HELPERS_UNREACHABLE_NOTE =
-  'Helper servers unreachable from this device — pulling blocks from peers instead, which is much slower.';
+  'Helper servers unreachable from this device, pulling blocks from peers instead, which is much slower.';
 
 type ChainListener = () => void;
 
-/** Detail of a locally-mined block — what the UI's "you found a block!" toast needs. */
+/** Detail of a locally-mined block, what the UI's "you found a block!" toast needs. */
 export interface MinedBlockInfo {
   height: number;
   /** Coinbase subsidy at this height (wei). Excludes tx fees. */
@@ -276,7 +276,7 @@ export class Node {
     // Refuse to mine while we're still syncing — mining on a stale tip just
     // produces orphans that the server + peers will reject.
     this.miner.setStartGate(() => {
-      if (this.syncStatus.syncing) return 'syncing — wait until the chain is caught up';
+      if (this.syncStatus.syncing) return 'syncing, wait until the chain is caught up';
       return null;
     });
   }
@@ -386,7 +386,7 @@ export class Node {
         // tab is about to re-download the whole chain, so say so rather than
         // silently bootstrapping and leaving the user to guess why.
         console.warn(
-          `[node] restore recovered 0 blocks from ${stored.length} stored — prefix unreachable; re-syncing from the network`,
+          `[node] restore recovered 0 blocks from ${stored.length} stored, prefix unreachable; re-syncing from the network`,
         );
       }
     } catch (e) {
@@ -630,8 +630,8 @@ export class Node {
         const note = o.status === 'ok'
           ? undefined
           : o.status === 'unsupported'
-            ? 'Fast sync unavailable: the helper servers don’t serve headers/snapshots — verifying every block instead.'
-            : `Fast sync attempt ${o.attempt} failed (${o.reason})${o.willRetry ? ' — retrying…' : ' — verifying every block instead.'}`;
+            ? 'Fast sync unavailable: the helper servers don’t serve headers/snapshots, verifying every block instead.'
+            : `Fast sync attempt ${o.attempt} failed (${o.reason})${o.willRetry ? ', retrying…' : ', verifying every block instead.'}`;
         this.emitSync({ fastSyncNote: note });
       },
     });
@@ -750,7 +750,7 @@ export class Node {
         // wallet history and flag the explorer index for its lazy rebuild.
         this.activityIndex.rebuild(this.wallet.address, this.chain.iterateCanonical());
         getExplorerIndex(this.chain).markStale();
-        console.log('[node] history backfill complete — full block history available');
+        console.log('[node] history backfill complete, full block history available');
         this.emitBackfill(this.backfill!.getStatus());
         this.emitChain();
       },
@@ -991,7 +991,7 @@ export class Node {
    */
   lock(amountWww: string, feeWww: string, redeemScript: Uint8Array): { lockId: string } | string {
     if (!this.chain.nextBlockScriptContext().scriptsActive) {
-      return 'scripts are not active yet — they activate at the fork date';
+      return 'scripts are not active yet, they activate at the fork date';
     }
     let amount: bigint;
     let fee: bigint;
@@ -1017,7 +1017,7 @@ export class Node {
    * `toAddress`. The lock must already be confirmed on-chain.
    */
   redeem(lockIdHex: string, toAddress: Uint8Array, feeWww: string, redeemScript: Uint8Array, witness: Uint8Array[]): string | null {
-    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet — they activate at the fork date';
+    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet, they activate at the fork date';
     const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
     if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
     if (compareBytes(scriptHash(redeemScript), lock.scriptHash) !== 0) return 'this script does not match the lock';
@@ -1054,7 +1054,7 @@ export class Node {
    * been created for our key, or the script hash won't match.
    */
   redeemHashlock(lockIdHex: string, preimage: Uint8Array, toAddress: Uint8Array, feeWww: string): string | null {
-    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet — they activate at the fork date';
+    if (!this.chain.nextBlockScriptContext().scriptsActive) return 'scripts are not active yet, they activate at the fork date';
     const lock = getLock(this.chain.tipState, lockIdHex.toLowerCase());
     if (!lock) return 'lock not found (it must be confirmed on-chain and unspent)';
     const redeemScript = hashlockSigScript(sha256(preimage), this.wallet.publicKey);

@@ -179,7 +179,7 @@ export class PeerNetwork {
    * mesh, without ever needing the helper servers.
    */
   private candidatePool = new Set<string>();
-  /** IDs we've already tried this session — avoid dialing the same dead peer in a loop. */
+  /** IDs we've already tried this session, avoid dialing the same dead peer in a loop. */
   private dialedThisSession = new Set<string>();
   /**
    * Outbound dials that have neither opened nor failed yet. Counted toward
@@ -201,7 +201,7 @@ export class PeerNetwork {
   private dialTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Pending signaling-reconnect timers, keyed by signaling base URL. */
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** Next reconnect delay per signaling URL — doubles per attempt, reset on `open`. */
+  /** Next reconnect delay per signaling URL, doubles per attempt, reset on `open`. */
   private reconnectDelayMs = new Map<string, number>();
   /** Notified whenever a peer ID is observed (live or learned) so Node can persist it. */
   private peerSeenListeners = new Set<(id: string) => void>();
@@ -212,7 +212,7 @@ export class PeerNetwork {
     private chain: Blockchain,
     private mempool: Mempool,
     private signalingServers: string[],
-    /** Used for /heartbeat fan-out and /peers union — owns the API server list. */
+    /** Used for /heartbeat fan-out and /peers union, owns the API server list. */
     private serverSync: ServerSync,
     /** Called whenever a remote peer causes a state change we should reflect. */
     private onUpdate: () => void,

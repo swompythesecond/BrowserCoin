@@ -143,7 +143,7 @@ W = 131072 (u32 words = 512 KiB)   GOLDEN = 0x9e3779b9
 seed = sha256(header)              // 32 bytes
 sw[0..7] = seed as 8 × u32be
 
-// 1. fill — chained, one seed word injected per step
+// 1. fill: chained, one seed word injected per step
 h = mix(sw[0] ^ GOLDEN)
 for i in 0..W-1:
     h = mix(h + GOLDEN + sw[i & 7]);  buf[i] = h
@@ -155,7 +155,7 @@ for c in 0..3:
     a[c] = mix(x ^ GOLDEN)
     i[c] = x & (W-1)
 
-// 3. walk — 4 interleaved dependent read-modify-writes, 524288 steps each
+// 3. walk: 4 interleaved dependent read-modify-writes, 524288 steps each
 for s in 0..524287:
     for c in 0..3:
         a[c] = mix(a[c] ^ buf[i[c]])

@@ -39,7 +39,7 @@ const FAST_SYNC_FETCH_TIMEOUT_MS = 30_000;
 /** Fast-sync attempts per session before falling back to full sync for good. */
 const FAST_SYNC_MAX_ATTEMPTS = 3;
 
-/** What a fast-sync attempt did — surfaced to the UI via setFastSyncHooks. */
+/** What a fast-sync attempt did, surfaced to the UI via setFastSyncHooks. */
 export interface FastSyncOutcome {
   status: 'ok' | 'unsupported' | 'failed';
   /** Failure reason from attemptFastSync (status 'failed' only). */
@@ -82,7 +82,7 @@ export interface ServerSyncStatus {
   reachable: number;
   /** Total count of API servers configured. `reachable / total` is the health ratio. */
   total: number;
-  /** Max height reported across reachable servers — what we sync up to. */
+  /** Max height reported across reachable servers, what we sync up to. */
   serverHeight: number;
   lastSyncedAt: number;
 }
@@ -199,7 +199,7 @@ export class ServerSync {
     return this.verifier;
   }
 
-  /** Shared PoW verifier pool — also used by the history backfill sweep. */
+  /** Shared PoW verifier pool, also used by the history backfill sweep. */
   verifierPool(): VerifierPool {
     return this.getVerifier();
   }
@@ -299,7 +299,7 @@ export class ServerSync {
     this.bridgeTimer = setInterval(() => void this.syncOnce(), BRIDGE_POLL_MS);
   }
 
-  /** Force a sync immediately — called after we mine a block locally. */
+  /** Force a sync immediately, called after we mine a block locally. */
   kick(): void {
     void this.syncOnce();
   }
@@ -551,7 +551,7 @@ export class ServerSync {
           this.fastSyncDone = true;
           console.warn('[serverSync] fast sync failed, falling back to full sync:', res.reason);
         } else {
-          this.fastSyncDone = true; // 'skipped' — backlog gone, nothing to retry
+          this.fastSyncDone = true; // 'skipped', backlog gone, nothing to retry
         }
       }
 

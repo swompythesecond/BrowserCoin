@@ -43,7 +43,7 @@ export interface ApplyContext {
   scriptsActive: boolean;
   blockHeight: number;
   blockMtp: number;
-  /** Locks created earlier in THIS block — not yet spendable (see applyRedeem). */
+  /** Locks created earlier in THIS block, not yet spendable (see applyRedeem). */
   locksCreatedThisBlock: Set<string>;
 }
 

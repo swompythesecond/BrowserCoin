@@ -10,7 +10,7 @@ export interface BlockHeader {
   stateRoot: Uint8Array;// 32
   timestamp: number;    // u64 (unix seconds)
   difficulty: number;   // u32 compact target
-  nonce: number;        // u32 (sufficient — miner increments timestamp on overflow)
+  nonce: number;        // u32 (sufficient, miner increments timestamp on overflow)
   miner: Uint8Array;    // 32-byte pubkey credited the coinbase
 }
 
@@ -85,7 +85,7 @@ export function decodeBlock(buf: Uint8Array): Block {
   return { header, transactions };
 }
 
-/** Encoded block size in bytes — used to enforce MAX_BLOCK_BYTES. */
+/** Encoded block size in bytes, used to enforce MAX_BLOCK_BYTES. */
 export function blockSize(b: Block): number {
   let txBytes = 0;
   for (const t of b.transactions) txBytes += encodedTxLen(t);

@@ -166,7 +166,7 @@ export class MinerController {
   private static readonly RATE_WINDOW_MS = 10_000;
   /** deltaHashes reports inside the rolling window (time-ascending). */
   private recentHashEvents: Array<{ t: number; hashes: number }> = [];
-  /** performance.now() at session start — denominator floor while the window fills. */
+  /** performance.now() at session start, denominator floor while the window fills. */
   private rateWindowAnchor = 0;
 
   constructor(
@@ -320,7 +320,7 @@ export class MinerController {
     this.restartTemplate();
   }
 
-  /** Call when the chain tip or mempool changes — rebuilds the template against fresh state. */
+  /** Call when the chain tip or mempool changes, rebuilds the template against fresh state. */
   refresh(): void {
     if (this.status.running) this.restartTemplate();
   }
@@ -402,7 +402,7 @@ export class MinerController {
       for (let i = 0; i < this.workers.length; i++) {
         const age = now - (this.workerLastReportAt[i] ?? now);
         if (age > MinerController.STALE_RESPAWN_MS) {
-          console.warn(`[miner] worker #${i + 1} silent for ${Math.round(age / 1000)}s — respawning`);
+          console.warn(`[miner] worker #${i + 1} silent for ${Math.round(age / 1000)}s, respawning`);
           this.respawnWorker(i);
         }
       }
@@ -449,7 +449,7 @@ export class MinerController {
     if (oomDelta > 0) {
       const next = Math.max(this.status.autoMinThreads, this.status.workerCount - 1);
       if (next !== this.status.workerCount) {
-        console.log(`[miner] auto-tune: ${oomDelta} OOM(s) — dropping threads ${this.status.workerCount} → ${next}, locking`);
+        console.log(`[miner] auto-tune: ${oomDelta} OOM(s), dropping threads ${this.status.workerCount} → ${next}, locking`);
         this.status.autoLocked = true;
         this.setWorkerCount(next);
       } else {
@@ -579,7 +579,7 @@ export class MinerController {
     if (txs.length === 0 && this.mempool.size() > 0) {
       console.warn(
         `[miner] template has 0 txs but mempool holds ${this.mempool.size()} ` +
-          '— all pending txs are nonce-gapped or unminable against the current tip',
+          '- all pending txs are nonce-gapped or unminable against the current tip',
       );
     }
 
@@ -591,7 +591,7 @@ export class MinerController {
       // always apply. If an edge case ever slips through, mine an empty block
       // rather than blank the template — a null template silently stops this
       // node from producing ANY blocks, which is far worse than skipping a few txs.
-      console.warn(`[miner] selected txs failed to apply (${err}) — falling back to an empty block`);
+      console.warn(`[miner] selected txs failed to apply (${err}), falling back to an empty block`);
       txs = [];
       sim = cloneState(this.chain.tipState);
       err = applyBlockTxs(sim, height, this.minerAddress, txs, scriptCtx); // empty set always applies

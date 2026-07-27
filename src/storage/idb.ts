@@ -133,7 +133,7 @@ interface StoredPeer {
   failures: number;   // consecutive failed dials; entry evicted past MAX_PEER_FAILURES
 }
 
-/** Mark a peer as successfully seen — call from `adoptConnection.open`. */
+/** Mark a peer as successfully seen, call from `adoptConnection.open`. */
 export async function recordPeerSeen(id: string): Promise<void> {
   const db = await open();
   const tx = db.transaction(PEERS_STORE, 'readwrite');

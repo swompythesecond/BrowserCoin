@@ -65,7 +65,7 @@ export const TX_PREIMAGE_LEN = 4 /*chainId*/ + 32 /*from*/ + 32 /*to*/ + 8 /*amo
 /** Length of a fully encoded transfer on the wire. */
 export const TX_ENCODED_LEN = TX_PREIMAGE_LEN + 64; // + signature
 
-/** Bytes that get hashed/signed — chain id + (from, to, amount, fee, nonce). */
+/** Bytes that get hashed/signed, chain id + (from, to, amount, fee, nonce). */
 export function txPreimage(tx: Omit<Transaction, 'signature'>): Uint8Array {
   return concat(
     u32be(CHAIN_ID),

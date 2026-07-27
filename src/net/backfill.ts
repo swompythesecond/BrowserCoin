@@ -45,9 +45,9 @@ export interface BackfillDeps {
   /** Persist an attached block (IDB putBlock in production). */
   persistBlock: (hashHex: string, height: number, encoded: Uint8Array) => Promise<void>;
   onProgress?: (s: BackfillStatus) => void;
-  /** History is complete — rebuild indexes, drop the headerChain meta. */
+  /** History is complete, rebuild indexes, drop the headerChain meta. */
   onComplete?: () => void | Promise<void>;
-  /** A seeded header failed full PoW — forged prefix; discard and resync. */
+  /** A seeded header failed full PoW, forged prefix; discard and resync. */
   onFatal?: (reason: string) => void;
   idleMs?: number;
 }
@@ -108,7 +108,7 @@ export class HistoryBackfill {
         console.warn('[backfill] batch failed:', (e as Error).message);
       }
       if (this.stopped) return;
-      if (attached < 0) return; // fatal — onFatal already fired
+      if (attached < 0) return; // fatal, onFatal already fired
       if (attached > 0) {
         dryRounds = 0;
         this.deps.onProgress?.(this.getStatus());
@@ -136,7 +136,7 @@ export class HistoryBackfill {
 
     const body = await this.fetchBlocks(from, BACKFILL_BATCH);
     if (!body || body.blocks.length === 0) {
-      console.warn(`[backfill] no server returned blocks from h=${from} — retrying later`);
+      console.warn(`[backfill] no server returned blocks from h=${from}, retrying later`);
       return 0;
     }
 
@@ -155,7 +155,7 @@ export class HistoryBackfill {
     // forged chain wouldn't fail uniformly alongside a functioning pool.
     // Treat it as a dry round and retry later instead of counting strikes.
     if (decoded.length > 0 && !powResults.some(Boolean)) {
-      console.warn('[backfill] entire batch failed PoW verification — verifier pool unhealthy, retrying later');
+      console.warn('[backfill] entire batch failed PoW verification, verifier pool unhealthy, retrying later');
       return 0;
     }
 
@@ -165,7 +165,7 @@ export class HistoryBackfill {
       const block = decoded[i]!;
       const hashHex = bytesToHex(hashHeader(block.header));
       const entry = chain.getBlock(hashHex);
-      if (!entry) continue; // not one of ours (server fork?) — ignore
+      if (!entry) continue; // not one of ours (server fork?), ignore
       if (entry.hasBody) continue;
 
       if (!powResults[i]) {
@@ -181,7 +181,7 @@ export class HistoryBackfill {
           return -1;
         }
         this.powSuspects.add(h);
-        console.warn(`[backfill] PoW verify failed at h=${h} — re-checking next round before acting`);
+        console.warn(`[backfill] PoW verify failed at h=${h}, re-checking next round before acting`);
         continue;
       }
       this.powSuspects.delete(block.header.height); // cleared on a clean pass
@@ -204,7 +204,7 @@ export class HistoryBackfill {
     if (attached > 0) {
       console.log(`[backfill] attached ${attached} block bodies from h=${from}; ${chain.bodylessCount} remaining`);
     } else {
-      console.warn(`[backfill] batch from h=${from}: ${decoded.length} blocks fetched, 0 attached — retrying later`);
+      console.warn(`[backfill] batch from h=${from}: ${decoded.length} blocks fetched, 0 attached, retrying later`);
     }
     return attached;
   }

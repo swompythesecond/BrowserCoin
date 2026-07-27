@@ -15,7 +15,7 @@ export interface BurnAddressInfo {
   description: string;
 }
 
-/** 000…000dead — 60 zero nibbles followed by "dead" (64 hex chars). */
+/** 000…000dead, 60 zero nibbles followed by "dead" (64 hex chars). */
 export const DEAD_BURN_ADDRESS = '0'.repeat(60) + 'dead';
 
 export const BURN_ADDRESSES: Record<string, BurnAddressInfo> = {

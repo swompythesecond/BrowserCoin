@@ -15,7 +15,7 @@ export type Signature = Uint8Array;  // 64 bytes
 export interface KeyPair {
   privateKey: PrivateKey;
   publicKey: PublicKey;
-  address: string; // hex of pubkey — addresses ARE pubkeys in our chain (account model)
+  address: string; // hex of pubkey, addresses ARE pubkeys in our chain (account model)
 }
 
 export function generateKeyPair(): KeyPair {

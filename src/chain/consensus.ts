@@ -24,7 +24,7 @@ import {
  */
 const FLOOR_TARGET = compactToTarget(GENESIS_DIFFICULTY_COMPACT);
 
-/** ASERT anchor target — bigint cache of GENESIS's target. */
+/** ASERT anchor target, bigint cache of GENESIS's target. */
 const ANCHOR_TARGET = compactToTarget(GENESIS_DIFFICULTY_COMPACT);
 
 /**

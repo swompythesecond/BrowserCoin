@@ -15,7 +15,7 @@ type PendingResolve = (ok: boolean) => void;
 interface Job {
   block: Block;
   resolve: PendingResolve;
-  /** Dispatch attempts so far — see MAX_ATTEMPTS. */
+  /** Dispatch attempts so far, see MAX_ATTEMPTS. */
   attempts: number;
 }
 
@@ -64,7 +64,7 @@ export class VerifierPool {
       if (entry && entry.id === e.data.id) {
         clearTimeout(entry.timer);
         this.busy.delete(w);
-        if (e.data.err) this.retryOrFail(entry.job); // couldn't verify — not a verdict
+        if (e.data.err) this.retryOrFail(entry.job); // couldn't verify, not a verdict
         else entry.job.resolve(e.data.ok === true);
       }
       this.releaseWorker(w);
@@ -78,7 +78,7 @@ export class VerifierPool {
 
   /** Retire a wedged/dead worker, requeue its job, and backfill the pool. */
   private failWorker(w: Worker): void {
-    console.warn('[verifierPool] worker failed or stalled — retiring it and retrying its job');
+    console.warn('[verifierPool] worker failed or stalled, retiring it and retrying its job');
     const entry = this.busy.get(w);
     if (entry) {
       clearTimeout(entry.timer);

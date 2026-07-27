@@ -62,7 +62,7 @@ function healthOrder(urls: string[]): string[] {
 
   function score(url: string): number {
     const h = HEALTH.get(url);
-    if (!h) return 0; // unknown — between fresh-fail and any success
+    if (!h) return 0; // unknown, between fresh-fail and any success
     const recentFail = now - h.lastFailureMs < FAIL_AMNESIA_MS && h.lastFailureMs > h.lastSuccessMs;
     if (recentFail) {
       // Negative score; older failures less negative (more likely recovered).

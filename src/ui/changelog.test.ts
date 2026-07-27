@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { renderMarkdown, splitTitle } from './changelog.js';
+import { renderMarkdown, splitTitle, mergeSplitPosts } from './changelog.js';
+
+const entry = (over: Partial<Parameters<typeof mergeSplitPosts>[0][0]> = {}) => ({
+  id: '1', timestamp: '2026-07-23T12:36:00.000Z', edited: null, author: 'swompy',
+  pinned: false, content: 'x', attachments: [], ...over,
+});
 
 /**
  * The changelog renders text written in Discord by whoever can post in the
@@ -134,6 +139,70 @@ describe('renderMarkdown — formatting', () => {
   it('restores multiple code spans in the right order', () => {
     const out = renderMarkdown('`first` then `second`');
     expect(out).toBe('<p><code>first</code> then <code>second</code></p>');
+  });
+});
+
+describe('renderMarkdown — long urls', () => {
+  /**
+   * A pasted Reddit link has no spaces, so it cannot wrap and pushes the card
+   * past the viewport. The visible text is shortened; the href must not be.
+   */
+  it('shortens the visible text of a long bare url but keeps the href intact', () => {
+    const url = 'https://www.reddit.com/r/browserCoin/comments/1umr8g9/postmortem_why_the_browsercoin_node_server_slowed/';
+    const out = renderMarkdown(`Post mortem: ${url}`);
+    expect(out).toContain(`<a href="${url}"`);
+    const shown = /<a [^>]*>([^<]*)<\/a>/.exec(out)![1]!;
+    expect(shown.length).toBeLessThanOrEqual(58);
+    expect(shown).toContain('reddit.com/r/browserCoin');
+    expect(shown.endsWith('…')).toBe(true);
+  });
+
+  it('leaves a short url readable, minus the protocol', () => {
+    const out = renderMarkdown('see https://browsercoin.org now');
+    expect(out).toContain('>browsercoin.org</a>');
+  });
+
+  it('never rewrites the text of an explicit markdown link', () => {
+    const out = renderMarkdown('[the post](https://www.reddit.com/r/browserCoin/comments/1umr8g9/postmortem/)');
+    expect(out).toContain('>the post</a>');
+  });
+});
+
+describe('mergeSplitPosts', () => {
+  it('stitches a post Discord split across two messages, oldest part first', () => {
+    const merged = mergeSplitPosts([
+      entry({ id: '2', timestamp: '2026-07-23T12:36:40.000Z', content: 'second half' }),
+      entry({ id: '1', timestamp: '2026-07-23T12:36:00.000Z', content: 'first half' }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.content).toBe('first half\n\nsecond half');
+    expect(merged[0]!.timestamp).toBe('2026-07-23T12:36:00.000Z');
+  });
+
+  it('leaves posts far apart in time alone', () => {
+    const merged = mergeSplitPosts([
+      entry({ id: '2', timestamp: '2026-07-23T13:00:00.000Z', content: 'later post' }),
+      entry({ id: '1', timestamp: '2026-07-23T12:36:00.000Z', content: 'earlier post' }),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it('does not merge across different authors', () => {
+    const merged = mergeSplitPosts([
+      entry({ id: '2', timestamp: '2026-07-23T12:36:40.000Z', author: 'someone', content: 'b' }),
+      entry({ id: '1', timestamp: '2026-07-23T12:36:00.000Z', author: 'swompy', content: 'a' }),
+    ]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it('chains three parts of one long post', () => {
+    const merged = mergeSplitPosts([
+      entry({ id: '3', timestamp: '2026-07-23T12:37:00.000Z', content: 'c' }),
+      entry({ id: '2', timestamp: '2026-07-23T12:36:30.000Z', content: 'b' }),
+      entry({ id: '1', timestamp: '2026-07-23T12:36:00.000Z', content: 'a' }),
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.content).toBe('a\n\nb\n\nc');
   });
 });
 

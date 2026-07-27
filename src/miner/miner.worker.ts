@@ -43,7 +43,7 @@ type StartMsg = {
   headerBytes: Uint8Array;
   targetHex: string;     // hex of bigint target (256-bit)
   startNonce: number;    // typically 0
-  /** 0..1 — fraction of wall time we mine vs sleep. 1 = full blast, 0.5 = half. */
+  /** 0..1, fraction of wall time we mine vs sleep. 1 = full blast, 0.5 = half. */
   throttle: number;
 };
 

@@ -118,7 +118,7 @@ function readScriptNum(data: Uint8Array): number {
  */
 export function explainScript(script: Uint8Array): ScriptExplanation {
   if (script.length === 0) {
-    return { template: 'empty', title: 'Empty', summary: 'Empty script — nothing to satisfy.' };
+    return { template: 'empty', title: 'Empty', summary: 'Empty script, nothing to satisfy.' };
   }
   const { tokens } = tokenize(script);
 
@@ -153,7 +153,7 @@ export function explainScript(script: Uint8Array): ScriptExplanation {
     return {
       template: 'hashlock',
       title: 'Bare hash lock',
-      summary: `⚠ Spendable by ANYONE who reveals the secret whose ${alg} hash is ${h.slice(0, 12)}…. Because a redeem reveals the secret publicly, it can be front-run — not safe for paying a specific party. Demonstration only.`,
+      summary: `⚠ Spendable by ANYONE who reveals the secret whose ${alg} hash is ${h.slice(0, 12)}…. Because a redeem reveals the secret publicly, it can be front-run, not safe for paying a specific party. Demonstration only.`,
     };
   }
 
@@ -205,7 +205,7 @@ export function explainScript(script: Uint8Array): ScriptExplanation {
   return {
     template: 'custom',
     title: 'Custom script',
-    summary: 'A custom spending condition — see the opcodes below for exactly what must be satisfied.',
+    summary: 'A custom spending condition, see the opcodes below for exactly what must be satisfied.',
   };
 }
 
