@@ -23,18 +23,18 @@ const ABOUT_HTML = `
     ledger, with no one in charge, using nothing but math and electricity.
     Somewhere along the way, the thing most people came to call "crypto"
     stopped being about that and became a number on a chart, usually attached
-    to a coin that isn't decentralized at all — controlled by a foundation, a
+    to a coin that isn't decentralized at all: controlled by a foundation, a
     multisig of insiders, a "DAO" nobody can vote against.
   </p>
 
   <p>
     BrowserCoin goes back to what crypto actually is, and makes it easy enough
-    that anyone can be part of it. Open a webpage, you're in — no login, no
+    that anyone can be part of it. Open a webpage, you're in. No login, no
     signup, because real crypto doesn't require any.
     <strong>There is no market where you can buy BRC with dollars.</strong>
     The only way to get coins is to mine them, or to have someone who already
     mined some send them to you. Nobody is selling you anything.
-    <strong> This is not about making money — this is about enjoying the
+    <strong> This is not about making money, this is about enjoying the
     technology.</strong>
   </p>
 
@@ -53,7 +53,7 @@ const ABOUT_HTML = `
     <li>No central authority signs blocks. No multisig of insiders can override consensus. No "DAO" votes on the chain.</li>
     <li>No checkpoint server that can rewrite history.</li>
     <li>
-      The helper servers are tiny optional services — one brokers the
+      The helper servers are tiny optional services. One brokers the
       initial WebRTC handshake, another keeps a backup copy of the chain
       and helps new browsers find peers. Neither can sign blocks, override
       consensus, or mint coins. Run multiple of either; the client tries
@@ -74,13 +74,13 @@ const ABOUT_HTML = `
     <li>Total supply: <strong>21,000,000 BRC</strong>, ever.</li>
     <li>Block reward: <strong>50 BRC</strong>, halving every 210,000 blocks (~1 year at target pace).</li>
     <li>Target block time: <strong>2.5 minutes</strong>.</li>
-    <li>Proof-of-work: <strong>Sandglass v3</strong> — memory-<em>latency</em>-hard, 512 KiB × 2,097,152 dependent steps. Mineable on a laptop or phone; a high-end GPU gets no meaningful edge.</li>
+    <li>Proof-of-work: <strong>Sandglass v3</strong>: memory-<em>latency</em>-hard, 512 KiB × 2,097,152 dependent steps. Mineable on a laptop or phone; a high-end GPU gets no meaningful edge.</li>
     <li>Difficulty: <strong>ASERT</strong>, retargeted every block, 10-minute half-life.</li>
     <li>Account-model ledger, Ed25519 signatures, 256 KB block cap, per-byte minimum fee.</li>
   </ul>
 
   <p>
-    If those numbers look familiar — yes, the monetary policy is the same
+    If those numbers look familiar, yes, the monetary policy is the same
     shape as Bitcoin's. Same supply, same halving schedule, four times the
     throughput. That's intentional. An homage to Bitcoin if you want, but
     more importantly, it's a set of parameters that are widely understood
@@ -103,7 +103,7 @@ const ABOUT_HTML = `
     <em>memory-latency</em>-hard: a 512 KiB buffer is filled from the block
     header, then walked by 2,097,152 read-modify-write steps. Each step's
     address depends on the value the previous step just read, so the work is a
-    serial pointer chase — you cannot start step <em>n+1</em> until step
+    serial pointer chase. You cannot start step <em>n+1</em> until step
     <em>n</em> has come back from memory. Throwing more cores at one hash
     doesn't help, because the dependency is in the data, not in the schedule.
   </p>
@@ -118,7 +118,7 @@ const ABOUT_HTML = `
   </p>
   <p>
     This replaced <strong>Argon2id</strong>, which the chain launched with.
-    Argon2id is memory-<em>capacity</em>-hard — 32 MB per hash — and the theory
+    Argon2id is memory-<em>capacity</em>-hard, 32 MB per hash, and the theory
     was that GPUs couldn't feed that many parallel instances. In practice they
     could: GPU memory bandwidth is enormous, and farms were out-hashing
     browsers by 10–30×. That is the opposite of the goal, so the algorithm was
@@ -130,7 +130,7 @@ const ABOUT_HTML = `
   <p>
     21M cap, 50-coin reward, halving every 210,000 blocks. These numbers
     match Bitcoin's exactly. The supply schedule isn't being innovated on
-    here — Bitcoin's monetary policy is widely understood, the math is
+    here. Bitcoin's monetary policy is widely understood, the math is
     well-known, and copying it makes BrowserCoin instantly legible to
     anyone who's looked at how Bitcoin works. The only deliberate
     difference is the block time (2.5 minutes vs 10), which is 4× faster.
@@ -138,7 +138,7 @@ const ABOUT_HTML = `
 
   <h4>Why 2.5-minute blocks</h4>
   <p>
-    Fast enough that the experiment feels alive — you don't wait ten
+    Fast enough that the experiment feels alive. You don't wait ten
     minutes after starting to mine to find out whether anything is
     happening. Slow enough that block propagation across a peer-to-peer
     WebRTC network doesn't cause widespread orphaning. The 4× speedup
@@ -150,8 +150,8 @@ const ABOUT_HTML = `
     Bitcoin retargets every 2,016 blocks (~2 weeks) because its hashrate
     is enormous and stable. A browser network's hashrate can swing 100×
     when a few tabs open or close, so BrowserCoin retargets every block.
-    The algorithm is ASERT — the same anchor-based exponential rule
-    Bitcoin Cash adopted in 2020 — with target = anchor_target × 2^((Δt
+    The algorithm is ASERT, the same anchor-based exponential rule
+    Bitcoin Cash adopted in 2020, with target = anchor_target × 2^((Δt
     − n × T) / halflife). Equilibrium is a mathematical fixed point at
     any hashrate scale, so the chain converges smoothly whether one tab
     is mining or thousands are. The half-life is 10 minutes (4 target
@@ -161,11 +161,11 @@ const ABOUT_HTML = `
   </p>
   <p>
     "Anchor-based" means every block's difficulty is derived from one fixed
-    reference block rather than from a rolling window — which is what makes it
+    reference block rather than from a rolling window, which is what makes it
     immune to the clustering pathologies that plague sliding-window rules, and
     what makes single-block timestamp manipulation pointless. The anchor is
     currently block <strong>35,550</strong>, and the important detail is that
-    both of its inputs — its timestamp and its difficulty — are <em>read from
+    both of its inputs, its timestamp and its difficulty, are <em>read from
     the chain</em> rather than hardcoded. An anchor that states something the
     chain didn't actually do is the one way this algorithm fails badly, which
     is not a hypothetical; see fork #3.
@@ -173,7 +173,7 @@ const ABOUT_HTML = `
 
   <h4>Why Ed25519 signatures</h4>
   <p>
-    Fast, deterministic (no malleable signatures — every valid signature
+    Fast, deterministic (no malleable signatures, every valid signature
     for a given message is identical), well-audited, and the library is
     small enough to load in a browser without slowing the page. Bitcoin
     uses ECDSA which works but is slower and historically had
@@ -211,7 +211,7 @@ const ABOUT_HTML = `
     but it defeats the entire point of having a permissionless consensus
     system. BrowserCoin explicitly does not take that path. The defense
     against attacks is the same one Bitcoin actually relies on in
-    practice — making an attack expensive enough that nobody bothers —
+    practice: making an attack expensive enough that nobody bothers,
     adapted to a network without ASICs and without a fiat price.
     Latency-hard PoW denies an attacker cheap parallel hashrate; network
     scale raises the total cost; per-block retargeting closes the cheaper
@@ -221,7 +221,7 @@ const ABOUT_HTML = `
   <h4>Why the bootstrap server is replaceable</h4>
   <p>
     Peer discovery is the one part of a fully-decentralized browser
-    network that needs a stable starting point — browsers can't dial each
+    network that needs a stable starting point. Browsers can't dial each
     other without first knowing each other's WebRTC IDs. The bootstrap
     server provides that initial directory, and as a convenience also
     keeps a copy of the chain so a brand-new tab can catch up without
@@ -238,7 +238,7 @@ const ABOUT_HTML = `
     actually happened, including the one that was a mistake.
   </p>
 
-  <h4>Fork #1 — scripts · 2026-07-05</h4>
+  <h4>Fork #1: scripts · 2026-07-05</h4>
   <p>
     Added the on-chain script system: spend conditions beyond a plain
     signature, including hash-time-locked contracts. Activation was gated on
@@ -247,7 +247,7 @@ const ABOUT_HTML = `
     arrived.
   </p>
 
-  <h4>Fork #2 — Sandglass proof-of-work · block 33,550</h4>
+  <h4>Fork #2: Sandglass proof-of-work · block 33,550</h4>
   <p>
     Replaced Argon2id with Sandglass v3 for the reason described above: GPU
     farms had a 10–30× edge under Argon2id and the point of the chain is that
@@ -256,13 +256,13 @@ const ABOUT_HTML = `
     re-anchored ASERT there.
   </p>
 
-  <h4>Fork #3 — difficulty repair · block 35,550</h4>
+  <h4>Fork #3: difficulty repair · block 35,550</h4>
   <p>
     Fork #2's re-anchor used a <em>hardcoded estimate</em> of when the chain
     would reach the fork height, written three days in advance. Anchor-based
     ASERT amplifies anchor-time error exponentially, so a wrong guess could
     have exploded difficulty on its own. The mitigation shipped alongside it
-    was a clamp holding the target within 4× of the reset for 2,000 blocks —
+    was a clamp holding the target within 4× of the reset for 2,000 blocks,
     and the clamp was the actual bug.
   </p>
   <p>
@@ -271,7 +271,7 @@ const ABOUT_HTML = `
     accumulating behind it is textbook integral windup. The reset landed about
     10× too easy, difficulty pinned at the clamp ceiling from roughly block
     33,600, blocks ran ~60s instead of 150s, and by block 34,039 the drift had
-    wound up to −12.4 hours — an unclamped demand of some 2.6 × 10²² times the
+    wound up to −12.4 hours, an unclamped demand of some 2.6 × 10²² times the
     reset difficulty. At block 35,550 the clamp was due to expire and discharge
     all of it in a single retarget, making the next block unmineable. The chain
     would have stopped, permanently, and the emergency-drop rule could not have
@@ -280,7 +280,7 @@ const ABOUT_HTML = `
   <p>
     The fix was not a new mechanism but the removal of one. From block 35,551
     on, difficulty is plain, unbounded ASERT re-anchored on the <em>real</em>
-    header of block 35,550 — its actual mined timestamp and its actual
+    header of block 35,550: its actual mined timestamp and its actual
     difficulty, both read from the chain, neither guessed. A truthful anchor has
     nothing to contain, so there is no clamp, no settling window, no expiry, and
     no future cliff. That is the same property that let the original
@@ -295,7 +295,7 @@ const ABOUT_HTML = `
     <li>Click <strong>Mine</strong>. Your CPU starts grinding Sandglass hashes. When one lands below the current difficulty target, you've found a block and earned 50 BRC.</li>
     <li>Show someone the <strong>QR code</strong> next to your address. They can scan it to send you coins.</li>
     <li>Tell a friend.</li>
-    <li>And most importantly, have fun. Crypto is a neat technology — time to honor it by taking part. Not by trying to make profit.</li>
+    <li>And most importantly, have fun. Crypto is a neat technology, time to honor it by taking part. Not by trying to make profit.</li>
   </ol>
 
   <h3>The code</h3>

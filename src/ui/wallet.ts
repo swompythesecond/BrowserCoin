@@ -49,7 +49,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
           <div class="qr-box" data-w="qr"></div>
           <div class="qr-caption">Scan to send coins to this wallet.</div>
         </div>
-        <div class="mt-md text-sm muted" data-w="nonce">nonce —</div>
+        <div class="mt-md text-sm muted" data-w="nonce">nonce -</div>
       </section>
 
       <section class="card col-5" data-mount="send">
@@ -80,7 +80,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
         <div data-slot="header"></div>
         <div class="row" style="justify-content:space-between; align-items:center;">
           <div class="chips" data-w="chips"></div>
-          <span class="muted text-sm" data-w="count">—</span>
+          <span class="muted text-sm" data-w="count">-</span>
         </div>
         <div class="table-scroll mt-md">
           <table class="table">
@@ -103,21 +103,21 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     title: 'Balance',
     info: {
       title: 'Your balance',
-      body: `This is how much ${TICKER} your wallet owns. It updates automatically when new blocks arrive.\n\nPending transactions don't count yet — they only affect your balance after they confirm inside a block.`,
+      body: `This is how much ${TICKER} your wallet owns. It updates automatically when new blocks arrive.\n\nPending transactions don't count yet, they only affect your balance after they confirm inside a block.`,
     },
   }));
   slot('send', cardHeader({
     title: 'Send',
     info: {
       title: 'Sending coins',
-      body: `Paste any BrowserCoin address to send to it. The fee is a tip that helps miners include your transaction faster. The network requires at least ${MIN_TRANSFER_FEE} ${TICKER} — anything lower is rejected as spam.\n\nOnce sent, the transaction is broadcast to the network and waits in the mempool until a miner picks it up.`,
+      body: `Paste any BrowserCoin address to send to it. The fee is a tip that helps miners include your transaction faster. The network requires at least ${MIN_TRANSFER_FEE} ${TICKER}, anything lower is rejected as spam.\n\nOnce sent, the transaction is broadcast to the network and waits in the mempool until a miner picks it up.`,
     },
   }));
   slot('activity', cardHeader({
     title: 'Activity',
     info: {
       title: 'Your activity',
-      body: `Every coin you send, receive, or mine appears here. Use the filters to narrow the list. "Pending" means it's not yet in a block — wait one block to confirm.`,
+      body: `Every coin you send, receive, or mine appears here. Use the filters to narrow the list. "Pending" means it's not yet in a block, wait one block to confirm.`,
     },
   }));
 
@@ -216,7 +216,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     const shown = filtered.slice(start, start + PAGE_SIZE);
 
     if (all.length === 0) {
-      rowsEl.innerHTML = `<tr class="table-empty"><td colspan="5">No activity yet — share your address to receive ${TICKER}, or start mining.</td></tr>`;
+      rowsEl.innerHTML = `<tr class="table-empty"><td colspan="5">No activity yet, share your address to receive ${TICKER}, or start mining.</td></tr>`;
       countEl.textContent = '';
       pagerEl.innerHTML = '';
       return;

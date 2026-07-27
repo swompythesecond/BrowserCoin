@@ -130,7 +130,7 @@ export function openScanner(): Promise<string | null> {
         if (!settled && stream) rafId = requestAnimationFrame(tick);
       })
       .catch(() => {
-        captionEl.textContent = 'Camera unavailable — paste the address instead.';
+        captionEl.textContent = 'Camera unavailable, paste the address instead.';
         captionEl.className = 'qr-scanner-caption red';
       });
   });

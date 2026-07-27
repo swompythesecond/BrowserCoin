@@ -134,12 +134,12 @@ export function renderStatsView(container: HTMLElement, node: Node, index: Explo
         </div>
         <div class="stat-tile">
           <div class="stat-label">Est. network hashrate</div>
-          <div class="stat-value">${stats.hashrate === null ? '—' : formatHashrate(stats.hashrate)}</div>
+          <div class="stat-value">${stats.hashrate === null ? '-' : formatHashrate(stats.hashrate)}</div>
           <div class="stat-sub">from the last ${RATE_WINDOW} blocks</div>
         </div>
         <div class="stat-tile">
           <div class="stat-label">Avg block time</div>
-          <div class="stat-value ${stats.avgBlockTimeS === null ? '' : paceOk ? 'green' : 'amber'}">${stats.avgBlockTimeS === null ? '—' : formatDuration(stats.avgBlockTimeS)}</div>
+          <div class="stat-value ${stats.avgBlockTimeS === null ? '' : paceOk ? 'green' : 'amber'}">${stats.avgBlockTimeS === null ? '-' : formatDuration(stats.avgBlockTimeS)}</div>
           <div class="stat-sub">target ${formatDuration(TARGET_BLOCK_TIME_S)}</div>
         </div>
         <div class="stat-tile">

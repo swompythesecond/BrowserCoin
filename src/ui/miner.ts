@@ -39,7 +39,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
         <span data-w="status">idle</span>
       </div>
       <div class="hashrate" data-w="hashrate">0 <span class="hashrate-unit">H/s</span></div>
-      <div class="nonce-ticker" data-w="ticker">— waiting —</div>
+      <div class="nonce-ticker" data-w="ticker">- waiting -</div>
       <div class="mt-md row" style="justify-content:center; gap:10px;">
         <button data-w="toggle">Start mining</button>
         <button class="ghost" data-w="popout" hidden>⧉ Pop out</button>
@@ -49,17 +49,17 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     <div class="grid grid-3 mt-lg">
       <div class="stat-tile accent">
         <div class="stat-label">Mining block</div>
-        <div class="stat-value mono" data-w="block">—</div>
+        <div class="stat-value mono" data-w="block">-</div>
         <div class="stat-sub" data-w="txs">0 txs included</div>
       </div>
       <div class="stat-tile">
         <div class="stat-label">Difficulty</div>
-        <div class="stat-value mono" data-w="diff">—</div>
-        <div class="stat-sub" data-w="diffSub">target —</div>
+        <div class="stat-value mono" data-w="diff">-</div>
+        <div class="stat-sub" data-w="diffSub">target -</div>
       </div>
       <div class="stat-tile">
         <div class="stat-label">Estimated solve</div>
-        <div class="stat-value mono" data-w="eta">—</div>
+        <div class="stat-value mono" data-w="eta">-</div>
         <div class="stat-sub" data-w="etaSub">based on current hashrate</div>
       </div>
       <div class="stat-tile">
@@ -74,7 +74,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       </div>
       <div class="stat-tile">
         <div class="stat-label">Block reward (now)</div>
-        <div class="stat-value mono" data-w="reward">— ${TICKER}</div>
+        <div class="stat-value mono" data-w="reward">- ${TICKER}</div>
         <div class="stat-sub">halves every 210 000 blocks</div>
       </div>
     </div>
@@ -116,7 +116,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
           reward plus the fees from every transaction included.
         </p>
         <p class="text-sm muted" style="margin:0;">
-          Mining uses your CPU heavily — your laptop will warm up. Lower CPU power or threads
+          Mining uses your CPU heavily, your laptop will warm up. Lower CPU power or threads
           if you want to keep using your machine while it runs.
         </p>
       </section>
@@ -135,22 +135,22 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
         <div class="grid grid-2">
           <div class="stat-tile">
             <div class="stat-label">Elapsed on this template</div>
-            <div class="stat-value mono" data-w="diagElapsed">—</div>
-            <div class="stat-sub" data-w="diagAttempts">template #—</div>
+            <div class="stat-value mono" data-w="diagElapsed">-</div>
+            <div class="stat-sub" data-w="diagAttempts">template #-</div>
           </div>
           <div class="stat-tile">
             <div class="stat-label">Hashes on this template</div>
-            <div class="stat-value mono" data-w="diagAttemptHashes">—</div>
-            <div class="stat-sub" data-w="diagAttemptHashesSub">template needs ~— hashes</div>
+            <div class="stat-value mono" data-w="diagAttemptHashes">-</div>
+            <div class="stat-sub" data-w="diagAttemptHashesSub">template needs ~- hashes</div>
           </div>
           <div class="stat-tile">
             <div class="stat-label">P(found by now)</div>
-            <div class="stat-value mono" data-w="diagPFound">—</div>
+            <div class="stat-value mono" data-w="diagPFound">-</div>
             <div class="stat-sub" data-w="diagPFoundSub">under 95% is still normal-luck territory</div>
           </div>
           <div class="stat-tile">
             <div class="stat-label">Hashrate</div>
-            <div class="stat-value mono" data-w="diagAvgRate">—</div>
+            <div class="stat-value mono" data-w="diagAvgRate">-</div>
             <div class="stat-sub" data-w="diagAvgRateSub">session avg / live</div>
           </div>
           <div class="stat-tile" data-w="diagOomTile" style="grid-column: 1 / -1;">
@@ -168,7 +168,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     title: 'CPU & Threads',
     info: {
       title: 'CPU and threads',
-      body: `CPU power throttles each thread's duty cycle — 50% means each worker sleeps half the time.\n\nThreads spreads the work across multiple CPU cores. More threads = faster hashing, but more heat and battery drain.`,
+      body: `CPU power throttles each thread's duty cycle. 50% means each worker sleeps half the time.\n\nThreads spreads the work across multiple CPU cores. More threads = faster hashing, but more heat and battery drain.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="how"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -182,7 +182,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     title: 'Mining diagnostics',
     info: {
       title: 'Mining diagnostics',
-      body: `Per-worker hashrate plus stats on the *current template* — the specific block header your workers are grinding nonces against. The template's difficulty doesn't change while you're grinding it: it's frozen at build time. The controller rebuilds it whenever consensus rules would give a different difficulty (e.g. emergency drop kicks in), and on every new block or new tx in the mempool. P(found by now) compares hashes done on the current template against how many a block needs on average. PoW is memoryless — restarting at 99% probability does NOT improve your odds for the next hash; you just reset the counter. A few templates in a row reaching 95%+ is unlucky but not anomalous.`,
+      body: `Per-worker hashrate plus stats on the *current template*, the specific block header your workers are grinding nonces against. The template's difficulty doesn't change while you're grinding it: it's frozen at build time. The controller rebuilds it whenever consensus rules would give a different difficulty (e.g. emergency drop kicks in), and on every new block or new tx in the mempool. P(found by now) compares hashes done on the current template against how many a block needs on average. PoW is memoryless. Restarting at 99% probability does NOT improve your odds for the next hash; you just reset the counter. A few templates in a row reaching 95%+ is unlucky but not anomalous.`,
     },
   }));
 
@@ -415,7 +415,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     diagAttemptHashesSub.textContent =
       expected > 0n
         ? `template needs ~${formatBig(expected)} hashes on average`
-        : `template needs — hashes`;
+        : `template needs - hashes`;
 
     let pFound = 0;
     if (expectedNum > 0 && attemptHashes > 0) {
@@ -427,7 +427,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     diagPFound.textContent = `${pPct < 1 ? pPct.toFixed(2) : pPct.toFixed(1)}%`;
     diagPFound.style.color = pFound > 0.95 ? 'var(--red)' : pFound > 0.5 ? 'var(--accent)' : '';
     if (pFound > 0.95) {
-      diagPFoundSub.textContent = `unlucky — but PoW is memoryless, restarting doesn't help`;
+      diagPFoundSub.textContent = `unlucky but PoW is memoryless, restarting doesn't help`;
     } else if (pFound > 0.5) {
       diagPFoundSub.textContent = `solid chance one was already due`;
     } else {
@@ -449,7 +449,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     diagOom.textContent = String(s.oomCount);
     diagOom.style.color = s.oomCount > 0 ? 'var(--red)' : '';
     diagOomSub.textContent = s.oomCount > 0
-      ? `${s.oomCount} Argon2id allocations rejected by the browser — workers retried and kept going`
+      ? `${s.oomCount} Argon2id allocations rejected by the browser. Workers retried and kept going`
       : `workers retry automatically; non-zero usually means too many threads`;
 
     // Count stale workers and surface oversubscription separately from a
@@ -468,24 +468,24 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       const suggest = Math.max(2, Math.floor(rates.length / 2));
       hint = {
         cls: 'conn-strip bad',
-        html: `<span class="dot"></span> Browser rejected ${s.oomCount} WebAssembly memory allocation${s.oomCount === 1 ? '' : 's'} — too many threads for your available RAM. Workers retried automatically, but <b>lowering the threads slider to ~${suggest}</b> will get you a higher effective hashrate.`,
+        html: `<span class="dot"></span> Browser rejected ${s.oomCount} WebAssembly memory allocation${s.oomCount === 1 ? '' : 's'}: too many threads for your available RAM. Workers retried automatically, but <b>lowering the threads slider to ~${suggest}</b> will get you a higher effective hashrate.`,
       };
     } else if (staleCount >= 2 && staleCount >= rates.length / 2) {
       hint = {
         cls: 'conn-strip bad',
-        html: `<span class="dot"></span> ${staleCount} of ${rates.length} workers stalled — likely too many threads for your memory bandwidth. The controller is auto-respawning them; <b>lowering the threads slider to ~${Math.max(2, Math.floor(rates.length / 2))}</b> usually mines faster on memory-bound PoW.`,
+        html: `<span class="dot"></span> ${staleCount} of ${rates.length} workers stalled, likely too many threads for your memory bandwidth. The controller is auto-respawning them; <b>lowering the threads slider to ~${Math.max(2, Math.floor(rates.length / 2))}</b> usually mines faster on memory-bound PoW.`,
       };
     } else if (firstStaleIdx >= 0) {
       hint = {
         cls: 'conn-strip bad',
-        html: `<span class="dot"></span> Worker #${firstStaleIdx + 1} hasn't reported in ${staleAgeSec}s — the controller will auto-respawn it. If this repeats, try <b>Restart workers</b> or lower the threads count.`,
+        html: `<span class="dot"></span> Worker #${firstStaleIdx + 1} hasn't reported in ${staleAgeSec}s, the controller will auto-respawn it. If this repeats, try <b>Restart workers</b> or lower the threads count.`,
       };
     } else if (pFound > 0.95 && expectedNum > 0 && s.hashesPerSecond > 0) {
       const meanSec = expectedNum / s.hashesPerSecond;
       if (elapsedSec > 3 * meanSec) {
         hint = {
           cls: 'conn-strip warn',
-          html: `<span class="dot"></span> You'd normally have a block by now (${pPct.toFixed(1)}%). Could still be bad luck — worth a restart if it persists.`,
+          html: `<span class="dot"></span> You'd normally have a block by now (${pPct.toFixed(1)}%). Could still be bad luck, worth a restart if it persists.`,
         };
       }
     } else if (sessionElapsedSec > 300 && s.hashesPerSecond > 0 && avg < 0.5 * s.hashesPerSecond) {
@@ -496,7 +496,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       // threads/CPU mid-session, all of which are harmless after the fact.
       hint = {
         cls: 'conn-strip warn',
-        html: `<span class="dot"></span> Session average is well below the live rate — usually the tab spent time in the background (or the laptop slept), or CPU/threads were raised mid-session. If the live rate looks right, nothing is being wasted now.`,
+        html: `<span class="dot"></span> Session average is well below the live rate, usually the tab spent time in the background (or the laptop slept), or CPU/threads were raised mid-session. If the live rate looks right, nothing is being wasted now.`,
       };
     }
     if (hint) {
@@ -516,7 +516,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
 
     hashrateEl.innerHTML = `${formatHashNumber(s.hashesPerSecond)} <span class="hashrate-unit">${formatHashUnit(s.hashesPerSecond)}</span>`;
 
-    blockEl.textContent = s.currentHeight > 0 ? `#${s.currentHeight}` : '—';
+    blockEl.textContent = s.currentHeight > 0 ? `#${s.currentHeight}` : '-';
     txsEl.textContent = `${s.currentTxCount} ${s.currentTxCount === 1 ? 'tx' : 'txs'} included`;
 
     // When mining, show the difficulty of the template the worker is actually
@@ -559,7 +559,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
       } else if (s.autoLocked && s.workerCount > s.autoMinThreads) {
         detail = `settled at ${s.workerCount} after backing off from Max ${s.autoMaxThreads} (OOM). Raise Max if you want to retry`;
       } else if (s.autoLocked) {
-        detail = `at Min ${s.autoMinThreads} after repeated OOM — lower Max or check memory`;
+        detail = `at Min ${s.autoMinThreads} after repeated OOM, lower Max or check memory`;
       } else if (s.workerCount >= s.autoMaxThreads) {
         detail = `running at Max (${s.workerCount}). Will drop on OOM`;
       } else {
@@ -589,7 +589,7 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
   const tickerId = setInterval(() => {
     const s = node.miner.getStatus();
     if (!s.running || s.hashesPerSecond <= 0) {
-      tickerEl.textContent = s.running ? '— warming up —' : '— waiting —';
+      tickerEl.textContent = s.running ? '- warming up -' : '- waiting -';
     } else {
       tickerEl.textContent = `nonce 0x${randomHex(8)}  hash 0x${randomHex(12)}…`;
     }
@@ -616,13 +616,13 @@ export function mountMiner(host: HTMLElement, node: Node): () => void {
     connStrip.hidden = false;
     if (peers > 0) {
       connStrip.className = 'conn-strip ok';
-      connStrip.innerHTML = `<span class="dot"></span> Connected to <b>${peers}</b> peer${peers === 1 ? '' : 's'} — your blocks gossip directly to the network. <span class="muted">(${apiUp}/${apiTotal} API · ${sigOpen}/${sigTotal} signaling)</span>`;
+      connStrip.innerHTML = `<span class="dot"></span> Connected to <b>${peers}</b> peer${peers === 1 ? '' : 's'}, your blocks gossip directly to the network. <span class="muted">(${apiUp}/${apiTotal} API · ${sigOpen}/${sigTotal} signaling)</span>`;
     } else if (apiUp > 0) {
       connStrip.className = 'conn-strip warn';
-      connStrip.innerHTML = `<span class="dot"></span> Server-bridged — no direct peers right now. Blocks reach the chain through ${apiUp}/${apiTotal} helper server${apiUp === 1 ? '' : 's'} (other tabs pick them up within ~90s).`;
+      connStrip.innerHTML = `<span class="dot"></span> Server-bridged, no direct peers right now. Blocks reach the chain through ${apiUp}/${apiTotal} helper server${apiUp === 1 ? '' : 's'} (other tabs pick them up within ~90s).`;
     } else {
       connStrip.className = 'conn-strip bad';
-      connStrip.innerHTML = `<span class="dot"></span> Offline — no peers and no bootstrap server. Click <b>Start mining</b> to set up a direct peer link, or wait for connectivity to come back.`;
+      connStrip.innerHTML = `<span class="dot"></span> Offline, no peers and no bootstrap server. Click <b>Start mining</b> to set up a direct peer link, or wait for connectivity to come back.`;
     }
   }
 
@@ -846,7 +846,7 @@ function formatBig(n: bigint): string {
   return `${s[0]}.${s.slice(1, 3)}e${s.length - 1}`;
 }
 function formatDuration(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return '—';
+  if (!isFinite(sec) || sec < 0) return '-';
   if (sec < 1) return '<1s';
   if (sec < 60) return `~${sec.toFixed(0)}s`;
   if (sec < 3600) return `~${(sec / 60).toFixed(1)}m`;

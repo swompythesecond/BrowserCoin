@@ -33,7 +33,7 @@ export function renderRichView(container: HTMLElement, node: Node, index: Explor
           <table class="table">
             <thead><tr><th class="rank">#</th><th>address</th><th>balance</th><th class="col-hide-sm">% of supply</th><th class="col-hide-sm">txs sent</th></tr></thead>
             <tbody>${slice.length === 0
-              ? `<tr class="table-empty"><td colspan="5">No balances yet — mine the first block!</td></tr>`
+              ? `<tr class="table-empty"><td colspan="5">No balances yet, mine the first block!</td></tr>`
               : slice.map((r, i) => `<tr${r.address === you ? ' class="row-mine"' : ''}>
                 <td class="mono muted rank">${page * ROWS_PER_PAGE + i + 1}</td>
                 <td>${addressLink(r.address)}${r.address === you ? ' <span class="badge badge-you">you</span>' : ''}${isBurnAddress(r.address) ? ' ' + burnBadge() : ''}</td>

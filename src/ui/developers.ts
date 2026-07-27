@@ -17,7 +17,7 @@ export function mountDevelopers(host: HTMLElement): () => void {
 
     <article class="about-body">
       <p class="lead">
-        BrowserCoin's helper servers expose a fully open HTTP API — no auth,
+        BrowserCoin's helper servers expose a fully open HTTP API: no auth,
          CORS <code>*</code>. Anyone can build a wallet, block
         explorer, mining bot, or alternative client against the chain. The
         wire format is documented end-to-end so you don't need to read the
@@ -34,7 +34,7 @@ export function mountDevelopers(host: HTMLElement): () => void {
       <h3>Network constants</h3>
       <table>
         <tbody>
-          <tr><td><code>CHAIN_ID</code></td><td><code>0xc01dfeed</code> — baked into every tx signature; cross-chain replay is rejected at signature-verify time.</td></tr>
+          <tr><td><code>CHAIN_ID</code></td><td><code>0xc01dfeed</code>: baked into every tx signature; cross-chain replay is rejected at signature-verify time.</td></tr>
           <tr><td>Smallest unit</td><td>1 BRC = 10⁸ wei</td></tr>
           <tr><td>Max supply</td><td>21,000,000 BRC</td></tr>
           <tr><td>Target block time</td><td>150 s (2.5 min)</td></tr>
@@ -77,13 +77,13 @@ export function mountDevelopers(host: HTMLElement): () => void {
       <table>
         <thead><tr><th>Offset</th><th>Length</th><th>Field</th></tr></thead>
         <tbody>
-          <tr><td>0</td><td>4</td><td><code>chainId</code> — always <code>0xc01dfeed</code></td></tr>
-          <tr><td>4</td><td>32</td><td><code>from</code> — Ed25519 pubkey. <strong>This is the address</strong> — no hashing, no checksum.</td></tr>
-          <tr><td>36</td><td>32</td><td><code>to</code> — Ed25519 pubkey of recipient</td></tr>
+          <tr><td>0</td><td>4</td><td><code>chainId</code>: always <code>0xc01dfeed</code></td></tr>
+          <tr><td>4</td><td>32</td><td><code>from</code>: Ed25519 pubkey. <strong>This is the address</strong>: no hashing, no checksum.</td></tr>
+          <tr><td>36</td><td>32</td><td><code>to</code>: Ed25519 pubkey of recipient</td></tr>
           <tr><td>68</td><td>8</td><td><code>amount</code> (u64 wei)</td></tr>
           <tr><td>76</td><td>8</td><td><code>fee</code> (u64 wei)</td></tr>
           <tr><td>84</td><td>4</td><td><code>nonce</code> (u32, per-sender, must equal <code>state.nonce</code> .. <code>state.nonce+16</code>)</td></tr>
-          <tr><td><strong>88</strong></td><td>64</td><td><code>signature</code> — Ed25519 (RFC 8032) over bytes <code>[0, 88)</code></td></tr>
+          <tr><td><strong>88</strong></td><td>64</td><td><code>signature</code>: Ed25519 (RFC 8032) over bytes <code>[0, 88)</code></td></tr>
         </tbody>
       </table>
       <p>
@@ -100,13 +100,13 @@ export function mountDevelopers(host: HTMLElement): () => void {
         <thead><tr><th>Offset</th><th>Length</th><th>Field</th></tr></thead>
         <tbody>
           <tr><td>0</td><td>4</td><td><code>height</code> (u32; genesis is 0)</td></tr>
-          <tr><td>4</td><td>32</td><td><code>prevHash</code> — sha256 of parent header</td></tr>
-          <tr><td>36</td><td>32</td><td><code>txRoot</code> — Merkle root over <code>encodeTx(tx)</code></td></tr>
-          <tr><td>68</td><td>32</td><td><code>stateRoot</code> — account-tree root after applying this block</td></tr>
+          <tr><td>4</td><td>32</td><td><code>prevHash</code>: sha256 of parent header</td></tr>
+          <tr><td>36</td><td>32</td><td><code>txRoot</code>: Merkle root over <code>encodeTx(tx)</code></td></tr>
+          <tr><td>68</td><td>32</td><td><code>stateRoot</code>: account-tree root after applying this block</td></tr>
           <tr><td>100</td><td>8</td><td><code>timestamp</code> (u64 unix seconds)</td></tr>
-          <tr><td>108</td><td>4</td><td><code>difficulty</code> — compact target (Bitcoin-style "bits")</td></tr>
+          <tr><td>108</td><td>4</td><td><code>difficulty</code>: compact target (Bitcoin-style "bits")</td></tr>
           <tr><td>112</td><td>4</td><td><code>nonce</code> (u32)</td></tr>
-          <tr><td>116</td><td>32</td><td><code>miner</code> — pubkey credited reward + fees</td></tr>
+          <tr><td>116</td><td>32</td><td><code>miner</code>: pubkey credited reward + fees</td></tr>
         </tbody>
       </table>
 
@@ -121,8 +121,8 @@ export function mountDevelopers(host: HTMLElement): () => void {
       <table>
         <thead><tr><th>Height</th><th>Algorithm</th></tr></thead>
         <tbody>
-          <tr><td>0 – 33,549</td><td>Argon2id — legacy, still required to re-verify history</td></tr>
-          <tr><td>33,550 and above</td><td><strong>Sandglass v3</strong> — current (fork #2)</td></tr>
+          <tr><td>0 – 33,549</td><td>Argon2id: legacy, still required to re-verify history</td></tr>
+          <tr><td>33,550 and above</td><td><strong>Sandglass v3</strong>: current (fork #2)</td></tr>
         </tbody>
       </table>
 
@@ -167,7 +167,7 @@ fin = seed ‖ u32be(h) ‖ u32be(a0) ‖ u32be(a1) ‖ u32be(a2) ‖ u32be(a3) 
 powHash = sha256(fin)</code></pre>
       <p>
         Note the chains are stepped in lockstep (all four advance one step per
-        iteration <code>s</code>, and <code>s</code> is mixed into every store) —
+        iteration <code>s</code>, and <code>s</code> is mixed into every store):
         running one chain to completion before the next produces a different
         digest. Frozen test vectors live at
         <a href="https://github.com/swompythesecond/BrowserCoin/blob/main/src/crypto/sandglass.vectors.json" target="_blank" rel="noopener noreferrer">src/crypto/sandglass.vectors.json</a>;
@@ -216,7 +216,7 @@ await fetch(API_BASE + '/txs', {
 
       <h3>Run your own helper</h3>
       <p>
-        The helpers are pluggable and plural. None of them is an authority —
+        The helpers are pluggable and plural. None of them is an authority:
         every block they accept is validated locally exactly like a
         peer-relayed block, and browsers verify everything themselves anyway.
         A malicious helper can withhold blocks but cannot trick clients into
@@ -235,7 +235,7 @@ npm run server:peerjs   # → :9001 (independent process)</code></pre>
 
       <h3>Stability</h3>
       <p>
-        This is v0.2. Expect breakage — wire format, endpoint shapes, and
+        This is v0.2. Expect breakage: wire format, endpoint shapes, and
         consensus tweaks may change. There is no API versioning header. The
         <code>CHAIN_ID</code> is the only fork-resistant identifier, and the
         PoW salt's <code>-v2</code> suffix exists so a future hard fork can

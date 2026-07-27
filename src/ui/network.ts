@@ -19,11 +19,11 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
           <button class="ghost small" data-w="toggle">Disconnect</button>
         </div>
         <dl class="kv mt-md">
-          <dt>My peer ID</dt><dd data-w="id" class="mono">—</dd>
+          <dt>My peer ID</dt><dd data-w="id" class="mono">-</dd>
           <dt>Direct peers</dt><dd data-w="connected" class="mono">0</dd>
-          <dt>Network size</dt><dd data-w="netsize" class="mono">—</dd>
+          <dt>Network size</dt><dd data-w="netsize" class="mono">-</dd>
           <dt>Pending txs</dt><dd data-w="mempool" class="mono">0</dd>
-          <dt>Server</dt><dd data-w="server" class="mono">—</dd>
+          <dt>Server</dt><dd data-w="server" class="mono">-</dd>
         </dl>
       </section>
 
@@ -38,7 +38,7 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
           instantly even before peers are reachable.
         </p>
         <p class="text-sm muted" style="margin:0;">
-          When you're offline or can't reach any peers, you'll see "server-only" — sync still
+          When you're offline or can't reach any peers, you'll see "server-only" sync, still
           works through the server, but you're not gossiping with other browsers.
         </p>
       </section>
@@ -47,11 +47,11 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     <section class="card mt-md" data-mount="fork">
       <div data-slot="header"></div>
       <div class="row" style="justify-content:space-between;align-items:baseline;">
-        <span data-w="fork-state" class="mono">—</span>
-        <span data-w="fork-date" class="muted text-sm">—</span>
+        <span data-w="fork-state" class="mono">-</span>
+        <span data-w="fork-date" class="muted text-sm">-</span>
       </div>
       <p class="text-sm muted" style="margin:8px 0 0;">
-        Adoption: <span data-w="fork-adoption" class="mono">—</span>. The switch is driven by the
+        Adoption: <span data-w="fork-adoption" class="mono">-</span>. The switch is driven by the
         chain's own clock (median-time-past), so every up-to-date node flips together.
       </p>
     </section>
@@ -62,7 +62,7 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     title: 'Script hard-fork',
     info: {
       title: 'The script upgrade',
-      body: `Adds safe spend conditions (hash locks, time locks, multisig) for atomic swaps, vaults and escrow. It's a coordinated rule change on the SAME chain — your balances and mining history are untouched. Update before the switch date; non-updated tabs will fork off when scripts go live.`,
+      body: `Adds safe spend conditions (hash locks, time locks, multisig) for atomic swaps, vaults and escrow. It's a coordinated rule change on the SAME chain: your balances and mining history are untouched. Update before the switch date; non-updated tabs will fork off when scripts go live.`,
     },
   }));
 
@@ -70,7 +70,7 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     title: 'Connection',
     info: {
       title: 'Connection states',
-      body: `Online: connected to one or more peer browsers via WebRTC.\n\nServer-only: peers aren't reachable, but the bootstrap server is — you're still receiving new blocks.\n\nOffline: no path to either. Mining still works locally; you'll catch up when you reconnect.`,
+      body: `Online: connected to one or more peer browsers via WebRTC.\n\nServer-only: peers aren't reachable, but the bootstrap server is. You're still receiving new blocks.\n\nOffline: no path to either. Mining still works locally; you'll catch up when you reconnect.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="how"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -122,9 +122,9 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
     if (ps?.myId && (ps.connected > 0)) { stateEl.textContent = 'online'; stateEl.className = 'green'; }
     else if (apiUp > 0) { stateEl.textContent = 'server-only'; stateEl.className = 'muted'; }
     else { stateEl.textContent = 'offline'; stateEl.className = 'red'; }
-    idEl.textContent = ps?.myId ?? '—';
+    idEl.textContent = ps?.myId ?? '-';
     connEl.textContent = String(ps?.connected ?? 0);
-    sizeEl.textContent = ps ? String(ps.serverPeerCount) : '—';
+    sizeEl.textContent = ps ? String(ps.serverPeerCount) : '-';
     mempoolEl.textContent = String(node.mempool.size());
     if (ss) {
       const lag = node.chain.height - ss.serverHeight;
@@ -137,7 +137,7 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
       serverEl.textContent = `${tag} · height ${ss.serverHeight} · ${ss.reachable}/${ss.total} API · ${sigOpen}/${sigTotal} signaling`;
       serverEl.className = reachable ? 'green mono' : 'red mono';
     } else {
-      serverEl.textContent = '—';
+      serverEl.textContent = '-';
     }
 
     const cd = forkCountdown();

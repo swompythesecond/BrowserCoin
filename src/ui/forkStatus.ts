@@ -70,7 +70,7 @@ export function sandglassCountdown(currentHeight: number): SandglassCountdown {
   return {
     activated: false,
     blocksRemaining: remaining,
-    line: `New mining algorithm activates at block ${SANDGLASS_FORK_HEIGHT.toLocaleString()} — ${remaining.toLocaleString()} blocks to go (~${eta})`,
+    line: `New mining algorithm activates at block ${SANDGLASS_FORK_HEIGHT.toLocaleString()}, ${remaining.toLocaleString()} blocks to go (~${eta})`,
   };
 }
 
@@ -104,7 +104,7 @@ export function fork3Status(currentHeight: number): Fork3Status {
     return {
       activated: true,
       blocksRemaining: 0,
-      line: `Emergency hardfork LIVE — this client is on the corrected chain.`,
+      line: `Emergency hardfork LIVE, this client is on the corrected chain.`,
     };
   }
   // Blocks only, no time estimate: the chain is running well off the 150s target

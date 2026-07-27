@@ -34,7 +34,7 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Only http(s) links survive — blocks javascript:/data: smuggled through markdown. */
+/** Only http(s) links survive. Blocks javascript:/data: smuggled through markdown. */
 function safeHref(raw: string): string | null {
   const url = raw.replace(/&amp;/g, '&').trim();
   try {

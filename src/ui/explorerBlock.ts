@@ -48,7 +48,7 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
       <section class="card">
         <div class="card-header">
           <h3 class="card-title">Block #${h.height}</h3>
-          ${canonical ? '' : `<span class="badge badge-pending" title="A heavier branch won — this block is not part of the active chain.">off-chain fork</span>`}
+          ${canonical ? '' : `<span class="badge badge-pending" title="A heavier branch won, this block is not part of the active chain.">off-chain fork</span>`}
           <span class="card-spacer"></span>
           <span class="muted text-sm">
             ${h.height > 0 ? `<a class="hash" href="/explorer?block=${h.height - 1}">← #${h.height - 1}</a>` : ''}
@@ -57,9 +57,9 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
         </div>
         <dl class="kv">
           <dt>hash</dt><dd class="hash">${hashHex}</dd>
-          <dt>previous</dt><dd>${h.height === 0 ? '<span class="muted">—</span>' : blockLink(prevHex, prevHex)}</dd>
+          <dt>previous</dt><dd>${h.height === 0 ? '<span class="muted">-</span>' : blockLink(prevHex, prevHex)}</dd>
           <dt>time</dt><dd>${new Date(h.timestamp * 1000).toLocaleString()} <span class="muted">(${blockTime(h.timestamp)})</span></dd>
-          <dt>miner</dt><dd>${h.height === 0 ? '<span class="muted">— (genesis)</span>' : addressLink(bytesToHex(h.miner), bytesToHex(h.miner))}</dd>
+          <dt>miner</dt><dd>${h.height === 0 ? '<span class="muted">- (genesis)</span>' : addressLink(bytesToHex(h.miner), bytesToHex(h.miner))}</dd>
           <dt>reward</dt><dd>${formatAmount(reward)} ${TICKER} <span class="muted">${cb.hasBody ? `+ ${formatAmount(fees)} ${TICKER} fees` : '+ fees (pending download)'}</span></dd>
           <dt>difficulty</dt><dd>${difficultyBits(h.difficulty)} bits <span class="muted">(compact 0x${h.difficulty.toString(16).padStart(8, '0')})</span></dd>
           <dt>nonce</dt><dd>${h.nonce}</dd>
@@ -71,7 +71,7 @@ export function renderBlockView(container: HTMLElement, node: Node, index: Explo
       <section class="card mt-md">
         <h3 class="card-title">${cb.hasBody ? `${cb.block.transactions.length} transaction${cb.block.transactions.length === 1 ? '' : 's'}` : 'Transactions'}</h3>
         ${!cb.hasBody
-          ? `<p class="muted text-sm mt-md" style="font-style:italic;">Not downloaded yet — history is still syncing in the background.</p>`
+          ? `<p class="muted text-sm mt-md" style="font-style:italic;">Not downloaded yet history is still syncing in the background.</p>`
           : cb.block.transactions.length === 0
           ? `<p class="muted text-sm mt-md" style="font-style:italic;">Coinbase only (block reward).</p>`
           : `<div class="table-scroll mt-md"><table class="table">
@@ -158,7 +158,7 @@ export function renderTxView(container: HTMLElement, node: Node, index: Explorer
     container.innerHTML = `
       <section class="card">
         <h3 class="card-title">Transaction not found</h3>
-        <p class="muted text-sm mt-md">No transaction matches <span class="mono">${escapeForDisplay(hashHex)}</span> — it isn't on your copy of the chain or in the mempool.</p>
+        <p class="muted text-sm mt-md">No transaction matches <span class="mono">${escapeForDisplay(hashHex)}</span>, it isn't on your copy of the chain or in the mempool.</p>
       </section>`;
   }
 
@@ -166,7 +166,7 @@ export function renderTxView(container: HTMLElement, node: Node, index: Explorer
   return { repaint: paint };
 }
 
-/** Queries come from the URL — strip anything that isn't ours before echoing. */
+/** Queries come from the URL. Strip anything that isn't ours before echoing. */
 function escapeForDisplay(s: string): string {
   return s.replace(/[^0-9a-zA-Z]/g, '').slice(0, 80);
 }

@@ -7,8 +7,8 @@ export interface ActivityRow {
   status: 'pending' | 'confirmed' | 'mined';
   dir: 'sent' | 'received' | 'mined';
   counterparty: string;      // short hex, or 'block #N' for mined rows
-  counterpartyHex?: string;  // full hex address (sent/received) — for the explorer link
-  height?: number;           // block height (mined rows) — for the explorer link
+  counterpartyHex?: string;  // full hex address (sent/received) for the explorer link
+  height?: number;           // block height (mined rows) for the explorer link
   amount: bigint;            // positive = inflow, negative = outflow (incl. fee)
   fee: bigint;
   when: string;

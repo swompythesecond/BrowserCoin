@@ -206,7 +206,7 @@ export function renderAddressView(container: HTMLElement, node: Node, index: Exp
                   <td>${dirBadge(ref.dir)}</td>
                   <td>${row.counterparty}</td>
                   <td class="mono ${positive ? 'green' : 'red'}">${positive ? '+' : '-'}${formatAmount(row.delta < 0n ? -row.delta : row.delta)} ${TICKER}</td>
-                  <td class="mono muted col-hide-sm">${row.fee > 0n ? formatAmount(row.fee) : '—'}</td>
+                  <td class="mono muted col-hide-sm">${row.fee > 0n ? formatAmount(row.fee) : '-'}</td>
                   <td>${heightLink(ref.height)}</td>
                   <td class="col-hide-sm">${row.txHashHex ? txLink(row.txHashHex, row.txHashHex.slice(0, 10) + '…') : '<span class="muted">coinbase</span>'}</td>
                   <td class="muted">${blockTime(ref.ts)}</td>

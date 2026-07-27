@@ -90,7 +90,7 @@ export function scriptTxDetail(tx: Transaction): string | null {
         <dt>nonce</dt><dd>${tx.nonce}</dd>
         <dt>script hash</dt><dd class="hash">${bytesToHex(tx.scriptHash ?? new Uint8Array())}</dd>
       </dl>
-      <p class="muted text-sm mt-md">The spending conditions are committed as a hash and stay hidden until someone redeems this lock — at which point the full script is revealed and checked.</p>`;
+      <p class="muted text-sm mt-md">The spending conditions are committed as a hash and stay hidden until someone redeems this lock, at which point the full script is revealed and checked.</p>`;
   }
   if (isRedeem(tx)) {
     const lockHex = bytesToHex(tx.lockId ?? new Uint8Array());
@@ -111,7 +111,7 @@ export function scriptTxDetail(tx: Transaction): string | null {
 }
 
 function shortHex(b: Uint8Array | undefined): string {
-  if (!b || b.length === 0) return '—';
+  if (!b || b.length === 0) return '-';
   return bytesToHex(b).slice(0, 10) + '…';
 }
 

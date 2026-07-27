@@ -25,7 +25,7 @@ export function txLink(txHashHex: string, label?: string): string {
   return `<a class="hash" href="/explorer?tx=${txHashHex}" title="${txHashHex}">${label ?? txHashHex.slice(0, 12) + '…'}</a>`;
 }
 
-/** Leading-zero bits implied by a compact difficulty — matches the topbar. */
+/** Leading-zero bits implied by a compact difficulty. Matches the topbar. */
 export function difficultyBits(compact: number): number {
   const target = compactToTarget(compact);
   return target <= 0n ? 256 : 256 - target.toString(2).length;

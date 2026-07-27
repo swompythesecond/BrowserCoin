@@ -34,7 +34,7 @@ export function mountSettings(host: HTMLElement, node: Node): () => void {
         <div data-slot="header"></div>
         <p class="text-sm muted" style="margin:0 0 12px;">
           Your private key controls your coins. Export a backup before clearing browser data
-          or switching machines — without it, the wallet is gone.
+          or switching machines. Without it, the wallet is gone.
         </p>
         <div class="row">
           <button data-w="export">Export key…</button>
@@ -49,7 +49,7 @@ export function mountSettings(host: HTMLElement, node: Node): () => void {
         <p class="text-sm muted" style="margin:0 0 12px;">
           Save the canonical chain this tab currently sees to a file. Useful if
           you want to run your own helper server, archive the chain offline, or
-          rebuild infrastructure on top of it — the file matches the format the
+          rebuild infrastructure on top of it. The file matches the format the
           BrowserCoin API server reads on startup.
         </p>
         <div class="row">
@@ -66,7 +66,7 @@ export function mountSettings(host: HTMLElement, node: Node): () => void {
           API servers store backup copies and help new browsers find peers; signaling
           servers broker the initial WebRTC handshake. As long as <b>any one</b> server
           in either list is reachable, new browsers can still join the network.
-          Anyone can run a helper — add their URL to the lists below.
+          Anyone can run a helper, add their URL to the lists below.
         </p>
         <div class="grid grid-2">
           <div>
@@ -93,7 +93,7 @@ https://server2.example"></textarea>
         <p class="text-sm muted" style="margin:0 0 12px;">
           The list above is the servers <b>this browser</b> uses. This section is the other
           direction: helpers your client has <b>discovered</b> from peers, and a way to
-          <b>advertise your own</b> so others discover it too — no gatekeeper, no redeploy.
+          <b>advertise your own</b> so others discover it too. No gatekeeper, no redeploy.
           Records are signed by whoever runs the helper and are only hints; every block is
           still verified locally, so a bad helper can stall or withhold but never forge.
         </p>
@@ -118,7 +118,7 @@ https://server2.example"></textarea>
           <summary>Advanced</summary>
           <p class="text-sm muted" style="margin:12px 0;">
             Catching up on the chain re-checks the proof-of-work on every block. That hashing
-            is spread across CPU cores — more cores means faster initial sync, at the cost of
+            is spread across CPU cores. More cores means faster initial sync, at the cost of
             more memory and CPU while syncing. The default of 4 is a safe balance; raise it
             toward your core count if you have headroom to spare.
           </p>
@@ -146,12 +146,12 @@ https://server2.example"></textarea>
         <p class="text-sm muted" style="margin:0 0 12px;">
           Your network ID is how other browsers reach you. Share it with a friend
           (Discord, Signal, anywhere) and they can paste it below to form a direct
-          peer-to-peer link — useful when the bootstrap server is down or WebRTC
+          peer-to-peer link, useful when the bootstrap server is down or WebRTC
           can't find a route on its own.
         </p>
         <label>Your network ID</label>
         <div class="row">
-          <input data-w="my-id" readonly value="(hidden — click reveal)" />
+          <input data-w="my-id" readonly value="(hidden, click reveal)" />
           <button class="ghost small" data-w="reveal-id">Reveal</button>
           <button class="ghost small" data-w="copy-id" disabled>Copy</button>
         </div>
@@ -176,28 +176,28 @@ https://server2.example"></textarea>
     title: 'Wallet',
     info: {
       title: 'About your wallet',
-      body: `Your wallet is just an Ed25519 keypair stored in this browser. Anyone holding the private key controls the coins — so treat the exported JSON like a password.\n\nGenerating a new wallet does not delete the old one from the chain — its balance still exists, you just lose access without a backup.`,
+      body: `Your wallet is just an Ed25519 keypair stored in this browser. Anyone holding the private key controls the coins, so treat the exported JSON like a password.\n\nGenerating a new wallet does not delete the old one from the chain. Its balance still exists, you just lose access without a backup.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="chain-backup"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Chain backup',
     info: {
       title: 'Exporting the chain',
-      body: `Every browser tab keeps its own validated copy of the chain, and helper API servers keep canonical backups on disk. Exporting from here grabs the canonical chain this tab currently sees as heaviest.\n\nThe file uses the same JSON layout the helper API server reads on startup ({ version: 1, blocks: [hex…] }, oldest-first, excluding genesis). To bootstrap your own helper, drop the file in place of the server's chain-9000.json and start the server — it will replay your blocks and serve them like any other node.\n\nNo trust is transferred. Anyone importing the file re-verifies every block against consensus rules, so a tampered export is just rejected.`,
+      body: `Every browser tab keeps its own validated copy of the chain, and helper API servers keep canonical backups on disk. Exporting from here grabs the canonical chain this tab currently sees as heaviest.\n\nThe file uses the same JSON layout the helper API server reads on startup ({ version: 1, blocks: [hex…] }, oldest-first, excluding genesis). To bootstrap your own helper, drop the file in place of the server's chain-9000.json and start the server. It will replay your blocks and serve them like any other node.\n\nNo trust is transferred. Anyone importing the file re-verifies every block against consensus rules, so a tampered export is just rejected.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="servers"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Helper servers',
     info: {
       title: 'Helper servers',
-      body: `BrowserCoin is end-to-end peer-to-peer — the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper — the URLs are public.`,
+      body: `BrowserCoin is end-to-end peer-to-peer: the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper, the URLs are public.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="advertise"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Advertise & discovered helpers',
     info: {
       title: 'Advertising a helper',
-      body: `Helper discovery is permissionless — anyone can run an API or signaling helper and have it found, without asking the project. A helper announces itself with a small record signed by its operator key.\n\nThe signature proves who published the record, not that the helper is trustworthy: it can't make your client accept invalid blocks (those are always validated locally), so the worst a bad helper does is serve stale data or go offline. Your hardcoded seed helpers are always kept regardless.\n\nTo advertise: run your helper, generate a record with scripts/sign-helper-record.ts, and paste it here. Pasting seeds it into this client and gossips it to peers you connect to. To make it stick even when your tab is closed, also host the same JSON at your server's /helpers or at /.well-known/browsercoin/helpers.json.`,
+      body: `Helper discovery is permissionless: anyone can run an API or signaling helper and have it found, without asking the project. A helper announces itself with a small record signed by its operator key.\n\nThe signature proves who published the record, not that the helper is trustworthy: it can't make your client accept invalid blocks (those are always validated locally), so the worst a bad helper does is serve stale data or go offline. Your hardcoded seed helpers are always kept regardless.\n\nTo advertise: run your helper, generate a record with scripts/sign-helper-record.ts, and paste it here. Pasting seeds it into this client and gossips it to peers you connect to. To make it stick even when your tab is closed, also host the same JSON at your server's /helpers or at /.well-known/browsercoin/helpers.json.`,
     },
     link: { label: 'Refresh', onClick: () => renderHelperList() },
   }));
@@ -205,14 +205,14 @@ https://server2.example"></textarea>
     title: 'Chain verification',
     info: {
       title: 'Verification cores',
-      body: `When this tab catches up on the chain, it re-verifies the Argon2id proof-of-work on every block — that's the slow part of syncing. The work is fanned out across this many Web Workers, one per CPU core.\n\nMore cores = faster initial sync, but each worker holds ~32 MB while hashing, so a high setting briefly uses more memory. The default of 4 keeps a fresh tab light; if your machine has cores to spare, raise it toward the maximum. Changes apply immediately and are remembered for next time.`,
+      body: `When this tab catches up on the chain, it re-verifies the Argon2id proof-of-work on every block, that's the slow part of syncing. The work is fanned out across this many Web Workers, one per CPU core.\n\nMore cores = faster initial sync, but each worker holds ~32 MB while hashing, so a high setting briefly uses more memory. The default of 4 keeps a fresh tab light; if your machine has cores to spare, raise it toward the maximum. Changes apply immediately and are remembered for next time.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="devtools"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Developer · reset',
     info: {
       title: 'Clearing the chain cache',
-      body: `Drops every block this tab has stored in IndexedDB and reloads the page. On startup the node will pull the chain fresh from the helper servers, just like a brand-new browser would.\n\nUse this when you've changed something at the chain layer (consensus rules, genesis params, PoW salt) and want the local cache to stop replaying old blocks that the new code may reject.\n\nThis does NOT delete your wallet or server lists — those are stored in localStorage, not IndexedDB. To wipe the wallet too, use Export key above first, then clear browser site data manually.`,
+      body: `Drops every block this tab has stored in IndexedDB and reloads the page. On startup the node will pull the chain fresh from the helper servers, just like a brand-new browser would.\n\nUse this when you've changed something at the chain layer (consensus rules, genesis params, PoW salt) and want the local cache to stop replaying old blocks that the new code may reject.\n\nThis does NOT delete your wallet or server lists. Those are stored in localStorage, not IndexedDB. To wipe the wallet too, use Export key above first, then clear browser site data manually.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="peerid"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -254,7 +254,7 @@ https://server2.example"></textarea>
     const signaling = parseServerInput(sigList.value);
     node.setServerLists({ api, signaling });
     renderServerLists();
-    flash(msg, `Saved — ${api.length} API · ${signaling.length} signaling. Network reconnecting.`, 'green');
+    flash(msg, `Saved ${api.length} API · ${signaling.length} signaling. Network reconnecting.`, 'green');
   });
 
   resetServersBtn.addEventListener('click', () => {
@@ -301,7 +301,7 @@ https://server2.example"></textarea>
     if (records.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'muted';
-      empty.textContent = 'None yet. Helpers arrive from peers and configured API servers — or paste one below.';
+      empty.textContent = 'None yet. Helpers arrive from peers and configured API servers, or paste one below.';
       helperList.appendChild(empty);
       return;
     }
@@ -324,11 +324,11 @@ https://server2.example"></textarea>
   advertiseBtn.addEventListener('click', () => {
     const text = advertiseInput.value.trim();
     if (!text) { flash(advertiseMsg, 'Paste a signed helper record first.', 'red'); return; }
-    if (!node.serverSync) { flash(advertiseMsg, 'Network not ready yet — try again in a moment.', 'red'); return; }
+    if (!node.serverSync) { flash(advertiseMsg, 'Network not ready yet, try again in a moment.', 'red'); return; }
 
     const parsed = parseHelperRecordsInput(text);
     if (parsed.length === 0) {
-      flash(advertiseMsg, 'Could not read a helper record — expected the JSON from the signing tool.', 'red');
+      flash(advertiseMsg, 'Could not read a helper record. Expected the JSON from the signing tool.', 'red');
       return;
     }
 
@@ -361,7 +361,7 @@ https://server2.example"></textarea>
       revealIdBtn.textContent = 'Hide';
       copyIdBtn.disabled = false;
     } else {
-      myIdInput.value = id ? '(hidden — click reveal)' : '(connecting…)';
+      myIdInput.value = id ? '(hidden, click reveal)' : '(connecting…)';
       revealIdBtn.textContent = 'Reveal';
       copyIdBtn.disabled = true;
     }
@@ -445,7 +445,7 @@ https://server2.example"></textarea>
 
   exportChainBtn.addEventListener('click', () => {
     if (!node.chain.hasFullHistory) {
-      flash(chainMsg, 'Block history is still downloading in the background — try again once it completes.', 'red');
+      flash(chainMsg, 'Block history is still downloading in the background, try again once it completes.', 'red');
       return;
     }
     exportChainBtn.disabled = true;

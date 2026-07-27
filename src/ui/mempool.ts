@@ -24,7 +24,7 @@ export function mountMempool(host: HTMLElement, node: Node): () => void {
       <div data-slot="header"></div>
       <div class="row" style="justify-content:space-between; gap:8px;">
         <span class="muted text-sm" data-w="count">0 pending</span>
-        <span class="muted text-sm" data-w="totals">—</span>
+        <span class="muted text-sm" data-w="totals">-</span>
       </div>
       <div class="table-scroll mt-md">
         <table class="table">
@@ -62,7 +62,7 @@ export function mountMempool(host: HTMLElement, node: Node): () => void {
     let totalFees = 0n;
     for (const e of entries) { totalAmount += e.tx.amount; totalFees += e.tx.fee; }
     totalsEl.textContent = entries.length === 0
-      ? '—'
+      ? '-'
       : `${formatAmount(totalAmount)} ${TICKER} value · ${formatAmount(totalFees)} ${TICKER} fees`;
 
     const pages = Math.max(1, Math.ceil(entries.length / PER_PAGE));
@@ -71,7 +71,7 @@ export function mountMempool(host: HTMLElement, node: Node): () => void {
     const myAddr = node.wallet.address;
 
     if (entries.length === 0) {
-      rowsEl.innerHTML = `<tr class="table-empty"><td colspan="6">No pending transactions — every sent transaction has been mined.</td></tr>`;
+      rowsEl.innerHTML = `<tr class="table-empty"><td colspan="6">No pending transactions, every sent transaction has been mined.</td></tr>`;
       pagerEl.innerHTML = '';
       return;
     }

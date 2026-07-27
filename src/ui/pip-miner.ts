@@ -67,7 +67,7 @@ export async function openPipMiner(node: Node): Promise<void> {
       <span data-w="status">idle</span>
     </div>
     <div class="hashrate" data-w="hashrate">0 <span class="hashrate-unit">H/s</span></div>
-    <div class="pip-meta mono" data-w="meta">—</div>
+    <div class="pip-meta mono" data-w="meta">-</div>
     <button class="pip-toggle" data-w="toggle">Start mining</button>
     <label class="pip-cpu">CPU power: <span data-w="pct">100%</span></label>
     <input type="range" min="0" max="100" value="100" class="slider" data-w="slider" />

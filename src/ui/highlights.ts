@@ -23,21 +23,21 @@ const HIGHLIGHTS: Highlight[] = [
     title: 'Fulgur Pool',
     tag: 'Mining pool',
     description:
-      'Another community-run mining pool — combine hashrate with other miners for steadier, shared payouts.',
+      'Another community-run mining pool, combine hashrate with other miners for steadier, shared payouts.',
     url: 'https://fulgurpool.xyz/',
   },
   {
     title: 'BrowserCoin Rush',
     tag: 'Faucet game',
     description:
-      'A browser minigame that hands out BRC for playing — a fun way to pick up your first coins without mining.',
+      'A browser minigame that hands out BRC for playing, a fun way to pick up your first coins without mining.',
     url: 'https://browsercoinrush.cryptec.tech/',
   },
   {
     title: 'TabScope',
     tag: 'Explorer',
     description:
-      'A community-built block explorer for browsing the chain — blocks, transactions, and addresses, with its own take on the UI.',
+      'A community-built block explorer for browsing the chain: blocks, transactions, and addresses, with its own take on the UI.',
     url: 'https://tabscope.netlify.app/',
   },
   {
@@ -51,7 +51,7 @@ const HIGHLIGHTS: Highlight[] = [
     title: 'BRC Dice',
     tag: 'On-chain game',
     description:
-      'A SatoshiDice-inspired dice game played directly on the chain — send BRC to a game address to place a bet, and provably fair rolls pay winners straight back to their wallet.',
+      'A SatoshiDice-inspired dice game played directly on the chain: send BRC to a game address to place a bet, and provably fair rolls pay winners straight back to their wallet.',
     url: 'https://brcdice.duckdns.org/',
   },
 ];
@@ -83,7 +83,7 @@ export function mountHighlights(host: HTMLElement): () => void {
   view.innerHTML = `
     <div class="view-header">
       <h2 class="view-title">Community Highlights</h2>
-      <span class="view-sub">Things people have built around BrowserCoin. Independent projects, not affiliated with the core client — use at your own discretion.</span>
+      <span class="view-sub">Things people have built around BrowserCoin. Independent projects, not affiliated with the core client, use at your own discretion.</span>
     </div>
 
     <div class="grid grid-2 highlight-grid">
@@ -94,7 +94,7 @@ export function mountHighlights(host: HTMLElement): () => void {
       <div class="highlight-cta-body">
         <h3 class="highlight-cta-title">Built something cool for BRC?</h3>
         <p class="highlight-cta-text">
-          Made a pool, a faucet, a game, an explorer, a bot — anything that
+          Made a pool, a faucet, a game, an explorer, a bot, anything that
           touches BrowserCoin? Join the Discord and tell us about it, and we'll
           feature it right here.
         </p>

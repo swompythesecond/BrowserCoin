@@ -39,7 +39,7 @@ export function mountExplorer(host: HTMLElement, node: Node, params: URLSearchPa
   view.innerHTML = `
     <div class="view-header">
       <h2 class="view-title">Explorer</h2>
-      <span class="view-sub">Search any wallet, block or transaction — everything verified locally by your own node.</span>
+      <span class="view-sub">Search any wallet, block or transaction, everything verified locally by your own node.</span>
     </div>
 
     <form class="explorer-search" data-w="searchForm">
@@ -110,7 +110,7 @@ function runSearch(raw: string, node: Node, index: ExplorerIndex, router: Router
 
   if (/^\d{1,10}$/.test(q)) {
     const height = Number(q);
-    if (height > node.chain.height) return `Block #${height} doesn't exist yet — the chain is at #${node.chain.height}.`;
+    if (height > node.chain.height) return `Block #${height} doesn't exist yet, the chain is at #${node.chain.height}.`;
     router.navigate(`/explorer?block=${height}`);
     return null;
   }
@@ -133,7 +133,7 @@ function runSearch(raw: string, node: Node, index: ExplorerIndex, router: Router
     }
     return matches.length === 0
       ? 'No known address starts with that prefix. Paste the full 64-character address.'
-      : 'Several addresses start with that prefix — add a few more characters.';
+      : 'Several addresses start with that prefix, add a few more characters.';
   }
 
   return 'Enter an address, block height, block hash or transaction hash.';
@@ -158,8 +158,8 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
     <section class="card" data-mount="blocks">
       <div data-slot="header"></div>
       <div class="row" style="justify-content:space-between;">
-        <span class="muted text-sm">Tip: <span class="hash" data-w="tip">—</span></span>
-        <span class="muted text-sm" data-w="blockCount">—</span>
+        <span class="muted text-sm">Tip: <span class="hash" data-w="tip">-</span></span>
+        <span class="muted text-sm" data-w="blockCount">-</span>
       </div>
       <div class="table-scroll mt-md">
         <table class="table">
@@ -177,7 +177,7 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
     title: 'Blocks',
     info: {
       title: 'The chain',
-      body: `Each block bundles a batch of transactions and links to the previous block — that chain of hashes is what makes the history tamper-resistant.\n\nClick a row to expand the block and see every transaction inside.`,
+      body: `Each block bundles a batch of transactions and links to the previous block. That chain of hashes is what makes the history tamper-resistant.\n\nClick a row to expand the block and see every transaction inside.`,
     },
   }));
 
@@ -211,7 +211,7 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
 
   function renderTxDetail(b: BlockRow): string {
     if (!b.hasBody) {
-      return `<div class="muted text-sm" style="font-style:italic;">Transactions not downloaded yet — history is still syncing in the background.</div>`;
+      return `<div class="muted text-sm" style="font-style:italic;">Transactions not downloaded yet, history is still syncing in the background.</div>`;
     }
     if (b.txs.length === 0) {
       return `<div class="muted text-sm" style="font-style:italic;">Coinbase only (block reward).</div>`;
@@ -230,7 +230,7 @@ function renderBlocksView(container: HTMLElement, node: Node): SubView {
   }
 
   function paint(): void {
-    tipEl.textContent = node.chain.tip ? bytesToHex(hashHeader(node.chain.tip.block.header)).slice(0, 16) + '…' : '—';
+    tipEl.textContent = node.chain.tip ? bytesToHex(hashHeader(node.chain.tip.block.header)).slice(0, 16) + '…' : '-';
 
     const blocks = collectBlocks();
     blockCountEl.textContent = `${blocks.length} block${blocks.length === 1 ? '' : 's'}`;

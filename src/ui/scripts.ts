@@ -20,7 +20,7 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
   view.innerHTML = `
     <div class="view-header">
       <h2 class="view-title">Scripts</h2>
-      <span class="view-sub">Lock coins behind a condition instead of a single key — then unlock them by satisfying it.</span>
+      <span class="view-sub">Lock coins behind a condition instead of a single key, then unlock them by satisfying it.</span>
     </div>
 
     <div class="card" data-w="gate" hidden style="border-left:3px solid #d99a1c;padding:12px 16px;margin-bottom:16px;">
@@ -30,7 +30,7 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     <section class="card" data-mount="intro">
       <div data-slot="header"></div>
       <p class="text-sm muted" style="margin:0;">
-        A <b>hash-locked payment</b> releases coins to one specific recipient — but only once they
+        A <b>hash-locked payment</b> releases coins to one specific recipient, but only once they
         reveal a shared secret. It commits to both the secret's hash <em>and</em> the recipient's key,
         so the recipient must sign to claim. That signature binds the destination, so even though
         redeeming reveals the secret publicly, no one else can grab the coins. This is the building
@@ -100,7 +100,7 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
           <div class="label-caps" style="margin-bottom:8px;">Redeem with a raw script</div>
           <label>Lock ID</label><input data-w="raw-lockid" spellcheck="false" placeholder="64 hex characters" />
           <label class="mt-sm">Redeem script (hex)</label><textarea data-w="raw-rscript" rows="2" spellcheck="false"></textarea>
-          <label class="mt-sm">Witness — one hex push per line</label><textarea data-w="raw-witness" rows="3" spellcheck="false" placeholder="one push per line (hex); leave empty if the script needs no inputs"></textarea>
+          <label class="mt-sm">Witness: one hex push per line</label><textarea data-w="raw-witness" rows="3" spellcheck="false" placeholder="one push per line (hex); leave empty if the script needs no inputs"></textarea>
           <label class="mt-sm">Send to (address)</label><input data-w="raw-to" spellcheck="false" />
           <label class="mt-sm">Fee (${TICKER})</label><input data-w="raw-rfee" value="0.00001" />
           <div class="row mt-sm"><button data-w="raw-redeem-go">Redeem with raw script</button><span data-w="raw-redeem-msg" class="text-sm muted"></span></div>
@@ -122,14 +122,14 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     title: 'Hash-locked payments',
     info: {
       title: 'What is a script?',
-      body: `Normally a coin is guarded by one key. A script guards it with a small program. A hash-locked payment requires two things to claim: the recipient's signature AND a shared secret. The signature is what makes it safe — it binds the spend to the recipient, so revealing the secret on-chain doesn't let anyone else grab the coins. (A "bare" hash lock with no signature is front-runnable; it lives only in the Advanced section, marked demonstration-only.)`,
+      body: `Normally a coin is guarded by one key. A script guards it with a small program. A hash-locked payment requires two things to claim: the recipient's signature AND a shared secret. The signature is what makes it safe: it binds the spend to the recipient, so revealing the secret on-chain doesn't let anyone else grab the coins. (A "bare" hash lock with no signature is front-runnable; it lives only in the Advanced section, marked demonstration-only.)`,
     },
   }));
   slot('create', cardHeader({
     title: 'Create a hash-locked payment',
     info: {
       title: 'Locking coins',
-      body: `Pick an amount, the recipient's address, and a secret phrase. The lock commits to the secret's hash and the recipient's key. Only that recipient can claim, and only once they know the secret. Keep the secret safe — there's no recovery, but note a wrong recipient can never claim it either.`,
+      body: `Pick an amount, the recipient's address, and a secret phrase. The lock commits to the secret's hash and the recipient's key. Only that recipient can claim, and only once they know the secret. Keep the secret safe: there's no recovery, but note a wrong recipient can never claim it either.`,
     },
   }));
   slot('redeem', cardHeader({
@@ -140,7 +140,7 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     },
   }));
   slot('raw', cardHeader({
-    title: 'Advanced — raw scripts',
+    title: 'Advanced raw scripts',
     info: {
       title: 'Hand-written scripts',
       body: `For power users: paste a redeem script as raw hex to lock coins under any condition, then redeem by revealing the same script plus a witness (the stack inputs that satisfy it, one push per line). See the opcode reference below to write your own.`,
@@ -207,7 +207,7 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     cMsg.className = 'text-sm green';
     cResult.hidden = false;
     cResult.innerHTML = `Lock ID (share with the recipient): <span class="hash">${res.lockId}</span><br>
-      <span class="muted">Only the recipient's wallet can claim it, using the secret — the signed spend can't be front-run.</span>`;
+      <span class="muted">Only the recipient's wallet can claim it, using the secret. The signed spend can't be front-run.</span>`;
     // Pre-fill the redeem form so the round-trip is one click away (works here because
     // the recipient defaults to your own address).
     rLock.value = res.lockId;
@@ -323,8 +323,8 @@ export function mountScripts(host: HTMLElement, node: Node): () => void {
     if (!live) {
       const cd = forkCountdown();
       gateText.innerHTML = cd.activated
-        ? `⏳ <b>Activating now</b> — waiting for the chain's clock (median-time-past) to cross the threshold, a few minutes after ${forkActivationDateUTC()}. Locking and redeeming unlock automatically.`
-        : `⏳ <b>Not live yet.</b> ${cd.line} <span class="muted">(${forkActivationDateUTC()})</span>. You can build and preview scripts below to learn how they work — locking and redeeming unlock once the fork activates.`;
+        ? `⏳ <b>Activating now</b>: waiting for the chain's clock (median-time-past) to cross the threshold, a few minutes after ${forkActivationDateUTC()}. Locking and redeeming unlock automatically.`
+        : `⏳ <b>Not live yet.</b> ${cd.line} <span class="muted">(${forkActivationDateUTC()})</span>. You can build and preview scripts below to learn how they work. Locking and redeeming unlock once the fork activates.`;
     }
   }
   applyGate();

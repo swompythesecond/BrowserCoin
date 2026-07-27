@@ -41,7 +41,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   view.innerHTML = `
     <div class="view-header">
       <h2 class="view-title">Welcome to BrowserCoin</h2>
-      <span class="view-sub">A fully decentralized cryptocurrency you can mine, send and explore — right here in your browser. <a class="view-sub-link" href="/about">Learn more</a></span>
+      <span class="view-sub">A fully decentralized cryptocurrency: you can mine, send and explore right here in your browser. <a class="view-sub-link" href="/about">Learn more</a></span>
     </div>
 
     <div class="card" data-w="forkBanner" hidden style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:16px;border-left:3px solid #7c5cff;">
@@ -73,7 +73,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
           <div class="qr-box" data-w="qr"></div>
           <div class="qr-caption">Scan to send coins to this wallet.</div>
         </div>
-        <div class="mt-md text-sm muted" data-w="nonce">nonce —</div>
+        <div class="mt-md text-sm muted" data-w="nonce">nonce -</div>
       </section>
 
       <section class="card col-5" data-mount="miner">
@@ -86,8 +86,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
           </div>
           <div style="flex:1">
             <div class="label-caps">Difficulty</div>
-            <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="diff">— bits</div>
-            <div class="text-sm muted mt-sm" data-w="diffSub">target —</div>
+            <div class="mono" style="font-size:1.6rem; font-weight:700;" data-w="diff">- bits</div>
+            <div class="text-sm muted mt-sm" data-w="diffSub">target -</div>
           </div>
           <div style="display:flex; flex-direction:column; gap:8px;">
             <button data-w="toggle">Start mining</button>
@@ -130,8 +130,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
           <dt>Status</dt><dd data-w="state" class="muted">connecting…</dd>
           <dt>Peers</dt><dd data-w="peers" class="mono">0</dd>
           <dt>Miners</dt><dd data-w="miners" class="mono">0</dd>
-          <dt>Height</dt><dd data-w="height" class="mono">—</dd>
-          <dt>Server</dt><dd data-w="server" class="mono">—</dd>
+          <dt>Height</dt><dd data-w="height" class="mono">-</dd>
+          <dt>Server</dt><dd data-w="server" class="mono">-</dd>
         </dl>
       </section>
 
@@ -171,7 +171,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     title: 'Your wallet',
     info: {
       title: 'Your wallet',
-      body: `Every browser gets its own wallet automatically. It's a pair of keys saved in this browser — anyone who has the private key controls the coins.\n\nShare your address to receive ${TICKER}. Back up your wallet from Settings if you don't want to lose it when you clear your browser data.`,
+      body: `Every browser gets its own wallet automatically. It's a pair of keys saved in this browser. Anyone who has the private key controls the coins.\n\nShare your address to receive ${TICKER}. Back up your wallet from Settings if you don't want to lose it when you clear your browser data.`,
     },
     link: { label: 'Open wallet →', onClick: () => router.navigate('/wallet') },
   }));
@@ -187,7 +187,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     title: 'Recent activity',
     info: {
       title: 'Your activity',
-      body: `Every coin you send, receive, or mine appears here. "Pending" means a transaction is in the mempool but not yet inside a block — wait for the next block to be mined for it to confirm.`,
+      body: `Every coin you send, receive, or mine appears here. "Pending" means a transaction is in the mempool but not yet inside a block. Wait for the next block to be mined for it to confirm.`,
     },
     link: { label: 'View all →', onClick: () => router.navigate('/wallet') },
   }));
@@ -195,7 +195,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     title: 'Network',
     info: {
       title: 'Network',
-      body: `BrowserCoin has no central server — every tab is a full node. Your browser talks directly to other browsers over WebRTC, and a bootstrap server helps everyone find each other.`,
+      body: `BrowserCoin has no central server: every tab is a full node. Your browser talks directly to other browsers over WebRTC, and a bootstrap server helps everyone find each other.`,
     },
   }));
   mountSlot('explorer', cardHeader({
@@ -332,7 +332,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
 
     const rows = computeActivity(node).slice(0, PREVIEW_ROWS);
     actRowsEl.innerHTML = rows.length === 0
-      ? `<tr class="table-empty"><td colspan="5">No activity yet — share your address to receive ${TICKER}, or start mining.</td></tr>`
+      ? `<tr class="table-empty"><td colspan="5">No activity yet, share your address to receive ${TICKER}, or start mining.</td></tr>`
       : renderActivityRows(rows);
 
     const ps = node.network?.getStatus();
@@ -359,7 +359,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       netServerEl.textContent = `${tag} · ${ss.serverHeight} · ${ss.reachable}/${ss.total} up`;
       netServerEl.className = reachable ? 'green mono' : 'red mono';
     } else {
-      netServerEl.textContent = '—';
+      netServerEl.textContent = '-';
     }
 
     // Compact connectivity strip on the miner card — mirrors the full strip
@@ -428,7 +428,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
     minerStateEl.className = s.running ? 'green text-sm mt-sm' : 'text-sm muted mt-sm';
     hashrateEl.textContent = formatHashrate(s.hashesPerSecond);
     minerEtaEl.textContent = s.running
-      ? (s.hashesPerSecond > 0 ? `${formatHashrate(s.hashesPerSecond)} grinding — full stats on the Mine tab.` : 'measuring…')
+      ? (s.hashesPerSecond > 0 ? `${formatHashrate(s.hashesPerSecond)} grinding. Full stats on the Mine tab.` : 'measuring…')
       : 'Press start to begin.';
 
     // Sync the auto checkbox + slider enablement with controller state, so
@@ -473,7 +473,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   if (forkBanner && forkBannerText && !alreadyDismissed) {
     view.querySelector('[data-slot="forkInfo"]')?.appendChild(infoButton({
       title: 'The mining upgrade (Sandglass)',
-      body: `BrowserCoin is switching its mining algorithm from Argon2id to Sandglass — a memory-latency-hard proof-of-work tuned so a browser tab is competitive with GPUs again (GPU farms had taken over Argon2id).\n\nIt's a coordinated rule change on the SAME chain: your balance, history and coins are completely untouched. Only the mining puzzle changes, and only for blocks at/after the fork height — everything before it stays valid.\n\nAll you need to do is keep this tab refreshed before the switch — up-to-date tabs flip to Sandglass together at the fork block; non-updated tabs fork off until you reload.`,
+      body: `BrowserCoin is switching its mining algorithm from Argon2id to Sandglass, a memory-latency-hard proof-of-work tuned so a browser tab is competitive with GPUs again (GPU farms had taken over Argon2id).\n\nIt's a coordinated rule change on the SAME chain: your balance, history and coins are completely untouched. Only the mining puzzle changes, and only for blocks at/after the fork height. Everything before it stays valid.\n\nAll you need to do is keep this tab refreshed before the switch. Up-to-date tabs flip to Sandglass together at the fork block; non-updated tabs fork off until you reload.`,
     }));
     const updateForkBanner = (): void => {
       const cd = sandglassCountdown(node.chain.height);
@@ -507,12 +507,12 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   if (fork3Banner && fork3BannerText && !fork3Dismissed) {
     view.querySelector('[data-slot="fork3Info"]')?.appendChild(infoButton({
       title: 'The difficulty repair (fork #3)',
-      body: `A bug in the previous mining upgrade left difficulty pinned against a safety clamp, and when that clamp expires at block ${SANDGLASS2_ANCHOR_HEIGHT.toLocaleString()} the old rules would make the chain unmineable and stall it.\n\nThis release fixes it: from that block on, difficulty simply follows the network's speed again (plain ASERT, re-anchored on the real block), with no clamp and nothing hard-coded. Your balance, history and coins are untouched — only the difficulty rule changes, and only at/after that height.\n\nYou don't need to do anything else. Seeing this banner means your tab is already on the fixed client. Non-updated tabs will stop being able to mine at the fork block until they reload.`,
+      body: `A bug in the previous mining upgrade left difficulty pinned against a safety clamp, and when that clamp expires at block ${SANDGLASS2_ANCHOR_HEIGHT.toLocaleString()} the old rules would make the chain unmineable and stall it.\n\nThis release fixes it: from that block on, difficulty simply follows the network's speed again (plain ASERT, re-anchored on the real block), with no clamp and nothing hard-coded. Your balance, history and coins are untouched. Only the difficulty rule changes, and only at/after that height.\n\nYou don't need to do anything else. Seeing this banner means your tab is already on the fixed client. Non-updated tabs will stop being able to mine at the fork block until they reload.`,
     }));
     const updateFork3Banner = (): void => {
       const s = fork3Status(node.chain.height);
       fork3BannerText.innerHTML = s.activated
-        ? `<b>${s.line}</b> You're all set — nothing to do.`
+        ? `<b>${s.line}</b> You're all set, nothing to do.`
         : `<b>${s.line}</b> You're on the updated client; just keep this tab open.`;
     };
     updateFork3Banner();

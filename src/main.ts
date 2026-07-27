@@ -128,7 +128,7 @@ function refreshTopbar(): void {
   stat('mempool').textContent = `mempool ${node.mempool.size()}`;
   const bits = leadingZeroBits(node.chain.tipDifficulty);
   stat('difficulty').textContent = `diff ${bits} bits`;
-  stat('difficulty').title = `compact 0x${node.chain.tipDifficulty.toString(16)} — hash must have ${bits} leading zero bits`;
+  stat('difficulty').title = `compact 0x${node.chain.tipDifficulty.toString(16)}, hash must have ${bits} leading zero bits`;
 
   // History pill: visible only while a fast-synced tab is still backfilling
   // old block bodies. Balances are already final — this is history/explorer
@@ -139,7 +139,7 @@ function refreshTopbar(): void {
     hist.hidden = false;
     const pct = Math.round(((bf.total - bf.remaining) / bf.total) * 100);
     hist.textContent = `history ${pct}%`;
-    hist.title = 'Downloading full block history in the background — balances are already verified and final.';
+    hist.title = 'Downloading full block history in the background, balances are already verified and final.';
   } else {
     hist.hidden = true;
   }
@@ -182,7 +182,7 @@ const PHASE_LABEL: Record<string, string> = {
   headers:    'checking block headers',
   snapshot:   'verifying balance snapshot',
   ready:      'ready',
-  offline:    'offline — network unreachable',
+  offline:    'offline, network unreachable',
 };
 
 // Title / sub copy per phase. Two flavors of overlay: chain-sync (we have a
@@ -204,18 +204,18 @@ const PHASE_SUB: Record<string, string> = {
   restoring:
     'Replaying blocks you already verified, straight from local storage. Just a moment.',
   connecting:
-    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is — your balance will load as soon as someone answers.',
+    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is. Your balance will load as soon as someone answers.',
   fetching:
-    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is — your balance will load as soon as someone answers.',
+    'Looking for the bootstrap server and other browser nodes so we can ask where the chain tip is. Your balance will load as soon as someone answers.',
   verifying:
-    'Every browser is its own full node — no trusted central server. We re-check each block\'s proof-of-work locally before showing you any balance, so the chain is yours, not the server\'s word. This only happens once per fresh tab; reloads use the cached chain.',
+    'Every browser is its own full node, no trusted central server. We re-check each block\'s proof-of-work locally before showing you any balance, so the chain is yours, not the server\'s word. This only happens once per fresh tab; reloads use the cached chain.',
   headers:
-    'Downloading and checking every block header — the hash chain, the difficulty schedule, and spot-checked proof-of-work. No server is trusted; full blocks download in the background after you\'re ready.',
+    'Downloading and checking every block header: the hash chain, the difficulty schedule, and spot-checked proof-of-work. No server is trusted; full blocks download in the background after you\'re ready.',
   snapshot:
-    'Fetching a compact snapshot of every balance and verifying it against the header chain\'s state commitment — the snapshot can\'t be forged without redoing the chain\'s proof-of-work.',
+    'Fetching a compact snapshot of every balance and verifying it against the header chain\'s state commitment. The snapshot can\'t be forged without redoing the chain\'s proof-of-work.',
   ready:      '',
   offline:
-    'The bootstrap server is unreachable and no peers have answered. You can continue with your last cached state — syncing keeps retrying in the background, and mining unlocks once the chain catches up.',
+    'The bootstrap server is unreachable and no peers have answered. You can continue with your last cached state. Syncing keeps retrying in the background, and mining unlocks once the chain catches up.',
 };
 
 overlayDismiss.addEventListener('click', () => node.dismissSyncOverlay());
@@ -314,7 +314,7 @@ function paintSync(): void {
     const pct = target > 0 ? Math.min(100, Math.round((s.localHeight / target) * 100)) : 0;
     overlayBar.style.width = `${pct}%`;
     const eta = estimateRemaining(s.localHeight, s.targetHeight, s.phase);
-    overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '—'}${eta}`;
+    overlayMeta.textContent = `local ${s.localHeight} / server ${s.targetHeight || '-'}${eta}`;
   }
   overlayPhase.textContent = PHASE_LABEL[s.phase] ?? s.phase;
   overlayTitle.textContent = PHASE_TITLE[s.phase] ?? 'Connecting';
