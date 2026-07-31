@@ -20,6 +20,7 @@ export class Router {
   private fallback = '/';
   private currentCleanup: (() => void) | null = null;
   private currentPath = '';
+  private navListeners = new Set<(path: string) => void>();
 
   constructor(private host: HTMLElement) {
     window.addEventListener('popstate', () => this.resolve());
@@ -28,6 +29,17 @@ export class Router {
   route(path: string, mount: RouteHandler): this {
     this.routes.push({ path, mount });
     return this;
+  }
+
+  /**
+   * Notified after every resolved navigation with the matched route path.
+   * Chrome that lives outside the view root (the sync overlay, the nav strip)
+   * subscribes here so it can react to route class — e.g. the overlay only
+   * covers routes that actually run a node.
+   */
+  onNavigate(cb: (path: string) => void): () => void {
+    this.navListeners.add(cb);
+    return () => this.navListeners.delete(cb);
   }
 
   setFallback(path: string): this {
@@ -76,7 +88,19 @@ export class Router {
     });
 
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+
+    for (const cb of this.navListeners) cb(this.currentPath);
   }
+}
+
+export interface NavOptions {
+  root?: HTMLElement;
+  /**
+   * Where the brand (logo + name) navigates. Resolved per click, because the
+   * answer changes: a reader belongs on the landing page, someone already
+   * running a node belongs on their dashboard.
+   */
+  homePath?: () => string;
 }
 
 /**
@@ -85,7 +109,8 @@ export class Router {
  * intercept plain left-clicks with no modifier keys — middle-click, cmd-click,
  * etc. still open in a new tab as the user expects.
  */
-export function wireNav(router: Router, root: HTMLElement = document.body): void {
+export function wireNav(router: Router, opts: NavOptions = {}): void {
+  const root = opts.root ?? document.body;
   root.querySelectorAll<HTMLElement>('[data-nav] .nav-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const target = tab.dataset['route'];
@@ -95,7 +120,7 @@ export function wireNav(router: Router, root: HTMLElement = document.body): void
 
   // Clicking the brand (logo + name) returns to the home page.
   root.querySelector<HTMLElement>('.brand')?.addEventListener('click', () => {
-    router.navigate('/');
+    router.navigate(opts.homePath?.() ?? '/');
   });
 
   document.addEventListener('click', (e) => {

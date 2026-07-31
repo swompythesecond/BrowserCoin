@@ -1205,7 +1205,11 @@ label {
 .sync-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  /* Below the top bar (z-index 30) on purpose. The overlay covers the view it
+     belongs to, but the nav stays visible and clickable, so someone waiting out
+     a slow or stuck sync can always step out to About and read instead of
+     staring at a progress bar with no way off it. Modals (1000) still win. */
+  z-index: 25;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1422,3 +1426,73 @@ label {
 }
 .modal h3 { font-size: 1.05rem; font-weight: 600; }
 .modal input[readonly] { font-family: var(--mono); font-size: 0.85rem; }
+
+/* ============ Landing page (`/`) ============
+   A signpost, not a page: one statement and the ways onward. Centred in what
+   is left of the viewport so the emptiness reads as deliberate. */
+
+.view-landing {
+  max-width: 760px;
+  min-height: calc(100vh - 230px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.land-kicker {
+  margin: 0 0 14px;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.land-title {
+  margin: 0 0 16px;
+  font-size: 2.4rem;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+.land-lead {
+  margin: 0 0 26px;
+  font-size: 1.08rem;
+  line-height: 1.65;
+  color: var(--text-2);
+  max-width: 62ch;
+}
+.land-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.land-cta-primary {
+  padding: 13px 24px;
+  font-size: 1rem;
+}
+.land-cta .btn.ghost {
+  display: inline-block;
+  text-decoration: none;
+  padding: 13px 18px;
+}
+.land-cta .btn.ghost:hover { text-decoration: none; }
+.land-quiet {
+  margin: 18px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 58ch;
+}
+
+@media (max-width: 860px) {
+  .land-title { font-size: 1.9rem; }
+  .land-lead { font-size: 1rem; }
+}
+
+@media (max-width: 600px) {
+  .view-landing { min-height: 0; }
+  .land-title { font-size: 1.6rem; }
+  .land-cta { gap: 8px; }
+  .land-cta-primary,
+  .land-cta .btn.ghost { width: 100%; text-align: center; }
+}

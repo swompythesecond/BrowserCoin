@@ -9,6 +9,20 @@ interface StoredWallet {
 }
 
 /**
+ * Does this browser already hold a wallet? Unlike `loadOrCreateWallet` this
+ * never generates one — it's the "has this person used the app before?" probe
+ * the landing page uses to decide between "Launch" and "Resume", and it must
+ * not mint a keypair for someone who only came to read.
+ */
+export function hasWallet(): boolean {
+  try {
+    return localStorage.getItem(WALLET_KEY) !== null;
+  } catch {
+    return false; // storage blocked (private mode / embedded webview)
+  }
+}
+
+/**
  * Load the user's wallet from localStorage. If none exists, generate a fresh
  * keypair, persist it, and return that. Idempotent — calling this on every
  * page load is the intended pattern.

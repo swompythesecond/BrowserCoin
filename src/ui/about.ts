@@ -291,7 +291,7 @@ const ABOUT_HTML = `
   <h3>How to take part</h3>
 
   <ol>
-    <li>Open <strong>browsercoin.org</strong>. You'll get a wallet on first visit, stored in your browser. Back it up under Settings.</li>
+    <li>Open <strong>browsercoin.org</strong> and press <strong>Launch your node</strong>. Reading the site runs nothing; launching is what starts syncing the chain and creates a wallet, stored in your browser. Back it up under Settings.</li>
     <li>Click <strong>Mine</strong>. Your CPU starts grinding Sandglass hashes. When one lands below the current difficulty target, you've found a block and earned 50 BRC.</li>
     <li>Show someone the <strong>QR code</strong> next to your address. They can scan it to send you coins.</li>
     <li>Tell a friend.</li>

@@ -40,8 +40,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   view.className = 'view';
   view.innerHTML = `
     <div class="view-header">
-      <h2 class="view-title">Welcome to BrowserCoin</h2>
-      <span class="view-sub">A fully decentralized cryptocurrency: you can mine, send and explore right here in your browser. <a class="view-sub-link" href="/about">Learn more</a></span>
+      <h2 class="view-title">Your node</h2>
+      <span class="view-sub">This tab is a full node: wallet, mining, peers and chain, all live. <a class="view-sub-link" href="/about">How it works</a></span>
     </div>
 
     <div class="card" data-w="forkBanner" hidden style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:16px;border-left:3px solid #7c5cff;">

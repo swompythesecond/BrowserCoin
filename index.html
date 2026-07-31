@@ -5,12 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0a0b14" />
     <title>BrowserCoin: a cryptocurrency that lives in your browser</title>
+    <!-- The root URL is now a readable page rather than a node dashboard, so it
+         is worth describing properly: this is what search results and Discord
+         link previews show. -->
+    <meta name="description" content="BrowserCoin is a proof-of-work cryptocurrency whose nodes are browser tabs. No premine, no presale, no market: every coin exists because someone's CPU mined it." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BrowserCoin" />
+    <meta property="og:title" content="BrowserCoin: a cryptocurrency that lives in your browser" />
+    <meta property="og:description" content="Open a tab and your browser becomes a full node. No premine, no presale, no market. 21,000,000 supply, CPU-mineable proof-of-work, MIT licensed." />
+    <meta property="og:image" content="https://browsercoin.org/logo.png" />
+    <meta property="og:url" content="https://browsercoin.org/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="BrowserCoin: a cryptocurrency that lives in your browser" />
+    <meta name="twitter:description" content="Open a tab and your browser becomes a full node. No premine, no presale, no market." />
+    <meta name="twitter:image" content="https://browsercoin.org/logo.png" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="apple-touch-icon" href="/logo.png" />
   </head>
   <body>
-    <div class="sync-overlay" data-sync-overlay>
+    <!-- Starts hidden: the overlay belongs to the app routes, and `/` runs no
+         node at all. main.ts raises it only once a node is actually syncing
+         behind a route that needs one. -->
+    <div class="sync-overlay hidden" data-sync-overlay>
       <div class="sync-card">
         <img class="sync-logo" src="/logo.png" alt="BrowserCoin" />
         <h2 class="sync-title" data-sync-title>Syncing the chain</h2>
@@ -36,19 +53,23 @@
           <div class="brand-tagline">a cryptocurrency that lives in your browser</div>
         </div>
       </div>
+      <!-- Tabs marked `data-app-tab` drive a node and stay hidden for a
+           first-time visitor, who gets a four-tab site to read. main.ts reveals
+           them once a wallet exists or the node is launched. -->
       <nav class="nav-tabs" data-nav>
         <button class="nav-tab" data-route="/">Home</button>
-        <button class="nav-tab" data-route="/wallet">Wallet</button>
-        <button class="nav-tab" data-route="/mine">Mine</button>
-        <button class="nav-tab" data-route="/explorer">Explorer</button>
-        <button class="nav-tab" data-route="/scripts">Scripts</button>
-        <button class="nav-tab" data-route="/mempool">Mempool</button>
+        <button class="nav-tab" data-route="/app" data-app-tab hidden>Dashboard</button>
+        <button class="nav-tab" data-route="/wallet" data-app-tab hidden>Wallet</button>
+        <button class="nav-tab" data-route="/mine" data-app-tab hidden>Mine</button>
+        <button class="nav-tab" data-route="/explorer" data-app-tab hidden>Explorer</button>
+        <button class="nav-tab" data-route="/scripts" data-app-tab hidden>Scripts</button>
+        <button class="nav-tab" data-route="/mempool" data-app-tab hidden>Mempool</button>
         <button class="nav-tab" data-route="/about">About</button>
         <button class="nav-tab" data-route="/highlights">Community</button>
         <button class="nav-tab" data-route="/developers">Developers</button>
-        <button class="nav-tab" data-route="/settings">Settings</button>
+        <button class="nav-tab" data-route="/settings" data-app-tab hidden>Settings</button>
       </nav>
-      <div class="netstats">
+      <div class="netstats" hidden>
         <span class="stat"><span class="stat-dot" data-stat-dot="net"></span><span data-stat="height">height -</span></span>
         <span class="stat" data-stat="miners">miners -</span>
         <span class="stat" data-stat="peers">peers -</span>
