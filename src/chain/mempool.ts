@@ -88,7 +88,6 @@ export class Mempool {
     // Transfer / Lock: both debit `from` (amount + fee) and consume `nonce`.
     const fromHex = bytesToHex(tx.from);
     const sender = getAccount(state, fromHex);
-    if (sender.balance < tx.amount + tx.fee) return 'insufficient balance';
     // We allow nonces ≥ current expected (so a sender can queue a few ahead),
     // but cap how far ahead they can go to avoid memory pinning.
     if (tx.nonce < sender.nonce) return 'nonce too low';
@@ -97,13 +96,29 @@ export class Mempool {
     // Replace-by-fee: a sender may hold only ONE tx per nonce in the pool.
     // Block validation requires strictly sequential nonces, so two txs sharing a
     // (sender, nonce) can never both be mined — keep whichever pays more.
+    let replaced: MempoolEntry | null = null;
     for (const e of this.entries.values()) {
       if (!isRedeem(e.tx) && e.tx.nonce === tx.nonce && bytesToHex(e.tx.from) === fromHex) {
         if (feePerByte <= e.feePerByte) return 'nonce already pending';
-        this.entries.delete(e.hashHex);
+        replaced = e;
         break;
       }
     }
+
+    // Funds are checked against the balance NET of what this sender already has
+    // pending, not the raw tip balance. Every pooled tx of theirs is mined ahead
+    // of this one, so only the remainder is genuinely spendable. Checking the
+    // tip balance alone let two sends of 90 from a balance of 100 BOTH sit in
+    // the pool, where exactly one could ever confirm while the other lingered as
+    // "pending" until the sender happened to top up — and a receiver watching
+    // the explorer saw a pending payment that was never funded. The tx being
+    // replaced by fee frees its own commitment again.
+    const committed = this.pendingDebitFor(fromHex, sender.nonce, replaced?.hashHex);
+    if (sender.balance < committed + tx.amount + tx.fee) {
+      return committed > 0n ? 'insufficient balance (unconfirmed sends already committed)' : 'insufficient balance';
+    }
+
+    if (replaced) this.entries.delete(replaced.hashHex);
 
     const full = this.evictForRoom(feePerByte);
     if (full) return full;
@@ -170,6 +185,27 @@ export class Mempool {
       }
     }
     return next;
+  }
+
+  /**
+   * Total `amount + fee` a sender already has committed to still-mineable pooled
+   * txs. Anything below `onChainNonce` is dead weight (its slot is already spent)
+   * and is excluded, as is `excludeHashHex` — used by `add` to ignore the entry a
+   * replace-by-fee is about to evict. Redeems carry no `from`, so they're skipped.
+   *
+   * This is what makes "spendable" different from "balance": coins already
+   * promised to a pending tx are gone even though the tip state still shows them.
+   */
+  pendingDebitFor(addressHex: string, onChainNonce: number, excludeHashHex?: string): bigint {
+    let total = 0n;
+    for (const e of this.entries.values()) {
+      if (isRedeem(e.tx)) continue;
+      if (e.hashHex === excludeHashHex) continue;
+      if (e.tx.nonce < onChainNonce) continue;
+      if (bytesToHex(e.tx.from) !== addressHex) continue;
+      total += e.tx.amount + e.tx.fee;
+    }
+    return total;
   }
 
   /**

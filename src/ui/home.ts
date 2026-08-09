@@ -62,6 +62,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
       <section class="card hero col-7" data-mount="balance">
         <div data-slot="header"></div>
         <div class="balance" data-w="balance">0 <span class="unit">${UNIT_LONG}</span></div>
+        <div class="text-sm muted" data-w="spendable" hidden></div>
         <label>Your address (share this to receive coins)</label>
         <div class="row">
           <input data-w="address" readonly />
@@ -216,6 +217,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   }));
 
   const balEl = view.querySelector<HTMLElement>('[data-w="balance"]')!;
+  const spendableEl = view.querySelector<HTMLElement>('[data-mount="balance"] [data-w="spendable"]')!;
   const addrEl = view.querySelector<HTMLInputElement>('[data-w="address"]')!;
   const copyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy"]')!;
   const nonceEl = view.querySelector<HTMLElement>('[data-w="nonce"]')!;
@@ -325,7 +327,15 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
   const memRowsEl = view.querySelector<HTMLTableSectionElement>('[data-mount="mempool"] [data-w="memRows"]')!;
 
   function refresh(): void {
-    balEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${UNIT_LONG}</span>`;
+    const balance = node.myBalance();
+    const spendable = node.mySpendable();
+    balEl.innerHTML = `${formatAmount(balance)} <span class="unit">${UNIT_LONG}</span>`;
+    // Coins already promised to an unconfirmed send still show in the balance, so
+    // say what's actually left rather than let it read as spendable.
+    const committed = balance - spendable;
+    spendableEl.hidden = committed <= 0n;
+    spendableEl.textContent = `${formatAmount(spendable)} ${TICKER} available to send, `
+      + `${formatAmount(committed)} committed to sends that haven't confirmed yet.`;
     addrEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
     renderAddressQr(qrEl, node.wallet.address);

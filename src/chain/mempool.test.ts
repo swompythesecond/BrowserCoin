@@ -45,30 +45,98 @@ describe('mempool unminable eviction', () => {
     expect(mp.size()).toBe(0);
   });
 
-  it('selects only the fundable prefix and evicts the unaffordable tail', () => {
+  it('refuses the tx that would overdraw once pending sends are counted', () => {
     const alice = generateKeyPair();
     const bob = generateKeyPair();
     // Each tx costs amount(1) + fee(200) = 201. Balance funds exactly 3.
     const state = stateWith([{ addr: alice.address, balance: 650n, nonce: 0 }]);
+    const mp = new Mempool();
+    for (let n = 0; n < 3; n++) {
+      const tx = signTx(
+        { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: n },
+        alice.privateKey,
+      );
+      expect(mp.add(tx, state, 0)).toBeNull();
+    }
+    // The 4th still passes a naive `balance >= amount + fee` check (650 >= 201),
+    // but the three already pending have spoken for 603 of the 650.
+    const overdraw = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: 3 },
+      alice.privateKey,
+    );
+    expect(mp.add(overdraw, state, 0)).toMatch(/insufficient balance/);
+    expect(mp.size()).toBe(3);
+    expect(mp.selectForBlock(state, BIG_BUDGET)).toHaveLength(3);
+  });
+
+  it('never admits the same coins twice (the double-send the wallet used to allow)', () => {
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    // 1000 in the account, two sends that each cost 1000: the classic "I thought
+    // it failed, so I sent it again" case. Exactly one can ever be mined.
+    const state = stateWith([{ addr: alice.address, balance: 1000n, nonce: 0 }]);
+    const mp = new Mempool();
+    const first = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 800n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    const second = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 800n, fee: 200n, nonce: 1 },
+      alice.privateKey,
+    );
+    expect(mp.add(first, state, 0)).toBeNull();
+    expect(mp.add(second, state, 0)).toMatch(/insufficient balance/);
+    expect(mp.size()).toBe(1);
+
+    // And a peer relaying it back doesn't sneak it in either, which is what kept
+    // it churning in and out of the pool as a phantom "pending" payment.
+    expect(mp.add(second, state, GRACE_MS + 1)).toMatch(/insufficient balance/);
+    expect(mp.size()).toBe(1);
+  });
+
+  it('frees the replaced tx budget on a fee bump', () => {
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    const state = stateWith([{ addr: alice.address, balance: 1100n, nonce: 0 }]);
+    const mp = new Mempool();
+    const cheap = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 700n, fee: 200n, nonce: 0 },
+      alice.privateKey,
+    );
+    expect(mp.add(cheap, state, 0)).toBeNull();
+    // Same nonce, more fee: replaces the pending tx rather than stacking on top
+    // of it, so its 900 goes back in the budget before the funds check. Counting
+    // both would put the pair at 2000 against a balance of 1100 and reject it.
+    const bumped = signTx(
+      { from: alice.publicKey, to: bob.publicKey, amount: 700n, fee: 400n, nonce: 0 },
+      alice.privateKey,
+    );
+    expect(mp.add(bumped, state, 0)).toBeNull();
+    expect(mp.size()).toBe(1);
+    expect(mp.selectForBlock(state, BIG_BUDGET)).toHaveLength(1);
+  });
+
+  it('still evicts a queue that goes unfundable after admission', () => {
+    const alice = generateKeyPair();
+    const bob = generateKeyPair();
+    // Admitted while rich, so all 10 pass the funds check at the door.
+    const rich = stateWith([{ addr: alice.address, balance: 1000n * COIN, nonce: 0 }]);
     const mp = new Mempool();
     for (let n = 0; n < 10; n++) {
       const tx = signTx(
         { from: alice.publicKey, to: bob.publicKey, amount: 1n, fee: 200n, nonce: n },
         alice.privateKey,
       );
-      // add() checks balance per-tx against the full on-chain balance, so all 10
-      // are admitted even though the account can only fund 3 — the gap this fix closes.
-      expect(mp.add(tx, state, 0)).toBeNull();
+      expect(mp.add(tx, rich, 0)).toBeNull();
     }
     expect(mp.size()).toBe(10);
 
-    // Balance-aware selection stops at the overdraw.
-    expect(mp.selectForBlock(state, BIG_BUDGET)).toHaveLength(3);
-
-    // The 7 unfundable txs are evicted past grace; the 3 mineable ones stay.
-    expect(mp.pruneUnminable(state, GRACE_MS + 1)).toBe(7);
+    // A reorg leaves the sender able to fund only 3. Selection and the reaper are
+    // the safety net behind the admission check, so they must still hold.
+    const poor = stateWith([{ addr: alice.address, balance: 650n, nonce: 0 }]);
+    expect(mp.selectForBlock(poor, BIG_BUDGET)).toHaveLength(3);
+    expect(mp.pruneUnminable(poor, GRACE_MS + 1)).toBe(7);
     expect(mp.size()).toBe(3);
-    expect(mp.selectForBlock(state, BIG_BUDGET)).toHaveLength(3);
   });
 
   it('evicts a nonce-too-low tx immediately (no grace needed)', () => {

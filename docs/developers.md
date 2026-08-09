@@ -110,7 +110,7 @@ curl -X POST http://localhost:9000/txs \
 # { "admitted": 0, "errors": ["insufficient balance"] }
 ```
 
-Possible per-tx error strings (from `Mempool.add` in `src/chain/mempool.ts`): `bad signature`, `fee too low`, `insufficient balance`, `nonce too low`, `nonce too far ahead`, `amount negative`, `self-send forbidden`, `tx has no value`, `mempool full`, `tx chain id mismatch`.
+Possible per-tx error strings (from `Mempool.add` in `src/chain/mempool.ts`): `bad signature`, `fee too low`, `insufficient balance`, `insufficient balance (unconfirmed sends already committed)`, `nonce too low`, `nonce too far ahead`, `nonce already pending`, `amount negative`, `self-send forbidden`, `tx has no value`, `mempool full`, `tx chain id mismatch`.
 
 ### POST `/block`
 
@@ -165,14 +165,18 @@ Validation rules a sender must respect:
 - `from ≠ to` (self-send rejected).
 - Signature verifies under `from`.
 - Sender's `state.nonce ≤ tx.nonce ≤ state.nonce + 16`.
-- Sender's `balance ≥ amount + fee`.
+- Sender's `balance ≥ amount + fee + Σ(amount + fee) of that sender's txs already pending`. The
+  pool charges a tx against the balance net of the sender's other pending txs, not the raw tip
+  balance, so a sender can never queue more than it can fund. A replace-by-fee tx doesn't count
+  the entry it displaces.
 
 (Source: `validateTxStructure` in `src/chain/transaction.ts` and `Mempool.add` in `src/chain/mempool.ts`.)
 
 **Mempool eviction.** Admission is necessary but not sufficient to ever be mined. On every
 tip change the pool runs `Mempool.pruneUnminable`, which discards txs that can't be mined
 against the current tip: a consumed nonce slot, a **nonce gap** (a missing lower nonce blocks
-the whole run), or an **overdraw** (a sender queues more than its balance can fund). Anything
+the whole run), or an **overdraw** (a queue that was fundable at admission but stopped being so,
+e.g. after a reorg). Anything
 older than `MEMPOOL_TX_TTL_MS` (30 min) is reaped as a backstop. So "pending" always means
 "actually mineable." Batch senders (e.g. a faucet) must therefore assign **strictly sequential
 nonces** — derive the next nonce from the on-chain nonce plus your own pending count, as

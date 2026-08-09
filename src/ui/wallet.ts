@@ -40,6 +40,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
       <section class="card hero col-7" data-mount="balance">
         <div data-slot="header"></div>
         <div class="balance" data-w="balance">0 <span class="unit">${UNIT_LONG}</span></div>
+        <div class="text-sm muted" data-w="spendable" hidden></div>
         <label>Your address (share this to receive coins)</label>
         <div class="row">
           <input data-w="address" readonly />
@@ -103,7 +104,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
     title: 'Balance',
     info: {
       title: 'Your balance',
-      body: `This is how much ${TICKER} your wallet owns. It updates automatically when new blocks arrive.\n\nPending transactions don't count yet, they only affect your balance after they confirm inside a block.`,
+      body: `This is how much ${TICKER} your wallet owns. It updates automatically when new blocks arrive.\n\nCoins you have already sent stay in this number until the transaction confirms inside a block, but they are no longer yours to spend. When you have a send waiting, the line underneath shows what is still available, and that is the amount the send form will let you use.`,
     },
   }));
   slot('send', cardHeader({
@@ -122,6 +123,7 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
   }));
 
   const balanceEl = view.querySelector<HTMLElement>('[data-w="balance"]')!;
+  const spendableEl = view.querySelector<HTMLElement>('[data-w="spendable"]')!;
   const addressEl = view.querySelector<HTMLInputElement>('[data-w="address"]')!;
   const copyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy"]')!;
   const nonceEl = view.querySelector<HTMLElement>('[data-w="nonce"]')!;
@@ -181,7 +183,12 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
       const err = node.send(to, amountEl.value, feeEl.value);
       if (err) {
         msgEl.className = 'text-sm red';
-        msgEl.textContent = err;
+        // Spell out the spendable figure rather than echoing the raw pool error:
+        // "insufficient balance" reads like a lie next to a hero balance that
+        // still shows the coins an unconfirmed send has already spoken for.
+        msgEl.textContent = err.startsWith('insufficient balance')
+          ? `Not enough spendable ${TICKER}. Available to send right now: ${formatAmount(node.mySpendable())} ${TICKER}, the rest is committed to sends waiting to confirm.`
+          : err;
       } else {
         msgEl.className = 'text-sm green';
         msgEl.textContent = 'Submitted to mempool';
@@ -194,7 +201,15 @@ export function mountWallet(host: HTMLElement, node: Node, params?: URLSearchPar
   });
 
   function paintBalance(): void {
-    balanceEl.innerHTML = `${formatAmount(node.myBalance())} <span class="unit">${UNIT_LONG}</span>`;
+    const balance = node.myBalance();
+    const spendable = node.mySpendable();
+    balanceEl.innerHTML = `${formatAmount(balance)} <span class="unit">${UNIT_LONG}</span>`;
+    // Only worth a line when the two differ: with nothing pending they're equal
+    // and a second number would just be noise.
+    const committed = balance - spendable;
+    spendableEl.hidden = committed <= 0n;
+    spendableEl.textContent = `${formatAmount(spendable)} ${TICKER} available to send, `
+      + `${formatAmount(committed)} committed to sends that haven't confirmed yet.`;
     addressEl.value = node.wallet.address;
     nonceEl.textContent = `nonce ${node.myNonce()}`;
     renderAddressQr(qrEl, node.wallet.address);

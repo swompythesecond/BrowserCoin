@@ -942,6 +942,18 @@ export class Node {
     return getAccount(this.chain.tipState, this.wallet.address).balance;
   }
 
+  /**
+   * What the wallet can actually commit right now: the confirmed balance minus
+   * everything it already has waiting in the mempool. `myBalance()` keeps reading
+   * full until those txs confirm, which is exactly what used to tempt a user into
+   * sending the same coins twice, so the send form gates on this instead.
+   */
+  mySpendable(): bigint {
+    const acct = getAccount(this.chain.tipState, this.wallet.address);
+    const committed = this.mempool.pendingDebitFor(this.wallet.address, acct.nonce);
+    return acct.balance > committed ? acct.balance - committed : 0n;
+  }
+
   myNonce(): number {
     const onChain = getAccount(this.chain.tipState, this.wallet.address).nonce;
     // Account for our own txs already queued in the mempool so rapid sends get
