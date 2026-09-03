@@ -72,6 +72,7 @@ The two helpers run as independent processes — kill one and the other keeps wo
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
 | `npm run build` | Production build (typecheck + bundle) |
+| `npm run build:single` | One self-contained `dist-single/browsercoin.html` that runs from `file://` |
 | `npm run preview` | Serve the production build |
 | `npm test` | Run vitest unit tests |
 | `npm run server:api` | HTTP API helper (chain backup, `/peers`, `/heartbeat`, `/tip`, …) |
@@ -143,7 +144,9 @@ Build wallets, block explorers, or bots against any BrowserCoin helper server. T
 - **This is an experiment, not a financial instrument.** Don't put real value on the chain.
 - BRC has no fiat market. The 21M-supply cap exists because the rules are Bitcoin-shaped, not because the token is scarce in any meaningful economic sense.
 - **Helper servers are pluggable and plural.** Both the HTTP API and PeerJS signaling are independent services, each with its own URL list under **Settings → Helper servers**. Reads try every server in health order; writes fan out to all of them. As long as one of either kind is reachable, new browsers can join. Anyone can run their own with `npm run server:api` and/or `npm run server:peerjs`, publish signed helper records, or add URLs manually.
-- **The network does not depend on this project continuing to exist.** Peer discovery also runs over public Nostr relays (**Settings → Signaling substrates**), so every browsercoin.org host can disappear permanently and browsers will still find each other. This is verified, not asserted: with both `api1` and the PeerJS host pointed at nonexistent domains, two fresh tabs still connect and gossip. What *cannot* be removed is the need for some third party to carry the first handshake — a browser has no way to accept an unsolicited connection — so the goal is no *privileged* server rather than no server, which is the same position Bitcoin's DNS seeds occupy.
+- **The network does not depend on this project continuing to exist.** Peer discovery runs over public Nostr relays (**Settings > Signaling substrates**) alongside our own signaling, so every browsercoin.org host can disappear permanently and browsers still find each other. Verified, not asserted: with `api1` and the PeerJS host pointed at nonexistent domains, two fresh tabs still connect and gossip. What cannot be removed is the need for some third party to carry the first handshake, because a browser has no way to accept an unsolicited connection. The goal is no *privileged* server rather than no server, which is the same position Bitcoin's DNS seeds occupy.
+- **A handshake fits in a chat message.** A session description compacts to 90 bytes, so two people can connect their browsers by pasting a 158-character code to each other over any channel at all (**Settings > Manual handshake**). No relay, no server, nothing to block. It only has to happen once: after one connection a node discovers the rest of the mesh through that peer.
+- **The client is a file.** `npm run build:single` emits a single 799 KB `browsercoin.html` that runs straight from the filesystem, with no web server involved. Opened from disk it verified the chain to height 59,560, held seven peers and mined normally, so the domain is a convenience for newcomers rather than a dependency of participants.
 
 ## License
 
