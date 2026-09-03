@@ -196,6 +196,46 @@ wss://relay2.example"></textarea>
         <input type="range" min="6" max="24" value="12" step="1" class="slider" data-w="pslider" />
       </section>
 
+      <section class="card col-2" data-mount="manual">
+        <div data-slot="header"></div>
+        <p class="text-sm muted" style="margin:0 0 12px;">
+          The last resort, and the one nobody can switch off. Two browsers connect by two
+          people passing a short code between them, over any channel at all: a chat message,
+          an email, a photo of a screen. No relay, no server of ours, nothing in the middle
+          to block. You only ever need to do this once, because after one connection your
+          node learns about other peers from the peer it just met.
+        </p>
+        <p class="text-sm red" style="margin:0 0 12px;">
+          Your code contains your public IP address. Fine with someone you know. Think twice
+          before pasting it into a public channel.
+        </p>
+
+        <label>1. Invite someone</label>
+        <div class="row">
+          <button data-w="mk-invite">Create invite code</button>
+          <button class="ghost small" data-w="copy-invite" disabled>Copy</button>
+          <button class="ghost small" data-w="cancel-invite" disabled>Cancel</button>
+        </div>
+        <textarea data-w="invite-out" class="mono" rows="3" readonly
+          placeholder="Your invite code appears here. Send it to the other person."></textarea>
+        <label class="mt-md">2. Paste the reply they send back</label>
+        <div class="row">
+          <input data-w="reply-in" placeholder="BC1..." />
+          <button data-w="finish-invite">Connect</button>
+        </div>
+        <div class="text-sm mt-sm" data-w="invite-msg"></div>
+
+        <label class="mt-md">Or join someone else's invite</label>
+        <div class="row">
+          <input data-w="invite-in" placeholder="BC1..." />
+          <button data-w="accept-invite">Generate reply</button>
+          <button class="ghost small" data-w="copy-reply" disabled>Copy</button>
+        </div>
+        <textarea data-w="reply-out" class="mono" rows="3" readonly
+          placeholder="Your reply code appears here. Send it back to them to finish."></textarea>
+        <div class="text-sm mt-sm" data-w="join-msg"></div>
+      </section>
+
     </div>
 
     <div data-w="msg" class="text-sm muted mt-md"></div>
@@ -228,6 +268,17 @@ wss://relay2.example"></textarea>
     info: {
       title: 'Finding peers without anyone in charge',
       body: `WebRTC can't bootstrap itself: two browsers that have never met need a few hundred bytes of connection details to reach each other, and a browser has no way to receive them unsolicited. Something always carries that first message.\n\nThe question is only whether that something is a server this project runs. Nostr relays are public, permissionless, operated by hundreds of unrelated people, and already carry far more traffic than we add. Your node encrypts its connection details, publishes them to the relays, and a peer answers. Once the direct link is up the relay is irrelevant to it forever.\n\nNo relay is trusted. A hostile one can decline to introduce you to people, exactly like a bad DNS seed in Bitcoin, but it can never make you accept an invalid block, because every block is still verified locally no matter which path it arrived on.`,
+    },
+  }));
+  view.querySelector<HTMLElement>('[data-mount="manual"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Manual handshake',
+    info: {
+      title: 'Connecting with no infrastructure at all',
+      body: `Every other way of meeting a peer runs over some network: our signaling servers, or public relays. Those can be unreachable, blocked, or shut down. This one cannot, because the thing carrying the introduction is a person.
+
+A browser needs about 90 bytes from the other browser before a direct link can form. That is small enough to paste into a chat. You send your code, they send one back, and the two browsers connect straight to each other. Nothing else is involved, and nothing sees the connection afterwards.
+
+It is a round trip, so both people have to be around at the same time, and codes go stale after about fifteen minutes. But it only has to happen once: as soon as you hold one connection, your node discovers everyone else through it.`,
     },
   }));
   view.querySelector<HTMLElement>('[data-mount="advertise"] [data-slot="header"]')!.replaceWith(cardHeader({
@@ -478,6 +529,107 @@ wss://relay2.example"></textarea>
       dialBtn.disabled = false;
     }
   });
+
+  // --- Manual handshake --------------------------------------------------
+  //
+  // Signalling by human being. Deliberately usable when nothing else is: the
+  // buttons work whenever the node is running, including with every relay and
+  // every server of ours unreachable.
+  const mkInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="mk-invite"]')!;
+  const copyInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="copy-invite"]')!;
+  const cancelInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="cancel-invite"]')!;
+  const inviteOut = view.querySelector<HTMLTextAreaElement>('[data-w="invite-out"]')!;
+  const replyIn = view.querySelector<HTMLInputElement>('[data-w="reply-in"]')!;
+  const finishInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="finish-invite"]')!;
+  const inviteMsg = view.querySelector<HTMLElement>('[data-w="invite-msg"]')!;
+  const inviteIn = view.querySelector<HTMLInputElement>('[data-w="invite-in"]')!;
+  const acceptInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="accept-invite"]')!;
+  const replyOut = view.querySelector<HTMLTextAreaElement>('[data-w="reply-out"]')!;
+  const copyReplyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy-reply"]')!;
+  const joinMsg = view.querySelector<HTMLElement>('[data-w="join-msg"]')!;
+
+  /** Errors from the handshake already carry a sentence meant for a person. */
+  const humanError = (e: unknown): string => {
+    const m = e instanceof Error ? e.message : String(e);
+    return m || 'Something went wrong.';
+  };
+
+  const copyTo = (btn: HTMLButtonElement, text: string): void => {
+    void navigator.clipboard.writeText(text).then(() => {
+      const old = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => (btn.textContent = old), 1200);
+    });
+  };
+
+  const showInvite = (code: string | null): void => {
+    inviteOut.value = code ?? '';
+    copyInviteBtn.disabled = !code;
+    cancelInviteBtn.disabled = !code;
+  };
+  showInvite(node.network?.currentManualInvite() ?? null);
+
+  mkInviteBtn.addEventListener('click', async () => {
+    if (!node.network) { flash(inviteMsg, 'Network not running.', 'red'); return; }
+    mkInviteBtn.disabled = true;
+    flash(inviteMsg, 'Gathering connection details…', 'muted');
+    try {
+      const code = await node.network.createManualInvite();
+      showInvite(code);
+      flash(inviteMsg, 'Send this code to the other person, then paste their reply below.', 'green');
+    } catch (e) {
+      flash(inviteMsg, humanError(e), 'red');
+    } finally {
+      mkInviteBtn.disabled = false;
+    }
+  });
+
+  copyInviteBtn.addEventListener('click', () => copyTo(copyInviteBtn, inviteOut.value));
+
+  cancelInviteBtn.addEventListener('click', () => {
+    node.network?.cancelManualInvite();
+    showInvite(null);
+    flash(inviteMsg, 'Invite cancelled.', 'muted');
+  });
+
+  finishInviteBtn.addEventListener('click', async () => {
+    if (!node.network) { flash(inviteMsg, 'Network not running.', 'red'); return; }
+    const code = replyIn.value.trim();
+    if (!code) { flash(inviteMsg, 'Paste the reply code they sent you.', 'red'); return; }
+    finishInviteBtn.disabled = true;
+    flash(inviteMsg, 'Connecting…', 'muted');
+    try {
+      await node.network.completeManualInvite(code);
+      replyIn.value = '';
+      showInvite(null);
+      flash(inviteMsg, 'Connected. You are now on the network through that peer.', 'green');
+    } catch (e) {
+      flash(inviteMsg, humanError(e), 'red');
+    } finally {
+      finishInviteBtn.disabled = false;
+    }
+  });
+
+  acceptInviteBtn.addEventListener('click', async () => {
+    if (!node.network) { flash(joinMsg, 'Network not running.', 'red'); return; }
+    const code = inviteIn.value.trim();
+    if (!code) { flash(joinMsg, 'Paste the invite code they sent you.', 'red'); return; }
+    acceptInviteBtn.disabled = true;
+    flash(joinMsg, 'Gathering connection details…', 'muted');
+    try {
+      const reply = await node.network.acceptManualInvite(code);
+      replyOut.value = reply;
+      copyReplyBtn.disabled = false;
+      inviteIn.value = '';
+      flash(joinMsg, 'Send this reply back to them. You connect as soon as they paste it.', 'green');
+    } catch (e) {
+      flash(joinMsg, humanError(e), 'red');
+    } finally {
+      acceptInviteBtn.disabled = false;
+    }
+  });
+
+  copyReplyBtn.addEventListener('click', () => copyTo(copyReplyBtn, replyOut.value));
 
   renderId();
   const unsubNet = node.network?.onStatus(() => renderId()) ?? (() => {});
