@@ -42,7 +42,7 @@ Per-block ASERT retargeting is what lets the chain self-calibrate to the very vo
 - **Account model** (Ethereum-style: `{balance, nonce}` per address) — smaller state than UTXO, browser-friendly.
 - **Ed25519** signatures (`@noble/ed25519`) — fast, deterministic, audited.
 - **Argon2id PoW** (32 MB, 1 iteration, memory-hard) mined in a Web Worker so the UI stays smooth. RAM-bandwidth bottleneck — closest browser-friendly analogue to ASIC resistance.
-- **PeerJS / WebRTC** peer-to-peer. Helper services are split: `server/api.ts` (chain backup + peer discovery) and `server/peerjs.ts` (signaling) run as independent processes so they can fail independently. Both lists are configurable in-app; clients can also learn signed helper records from cache, same-origin `.well-known`, API helpers, and peers.
+- **WebRTC peer-to-peer with plural signaling substrates.** Two browsers that have never met need a few hundred bytes of SDP exchanged before a direct link can exist — a hard limit of the browser sandbox, not a design choice. BrowserCoin carries those bytes over *several independent networks at once*: `server/peerjs.ts` (this project's own signaling), and public Nostr relays (`src/net/signal/`), which are operated by hundreds of unrelated people and exist whether or not this project does. Any one working substrate is sufficient, so no single operator — including us — can stop new peers from finding each other. Helper services are likewise split: `server/api.ts` (chain backup + peer discovery) runs as an independent process. All lists are configurable in-app; clients can also learn signed helper records from cache, same-origin `.well-known`, API helpers, and peers.
 - **IndexedDB** for chain state, **localStorage** for the wallet keypair.
 - **Vanilla TypeScript + Vite** — no React, no framework runtime. Tiny bundle, hash-routed SPA shell.
 
@@ -143,6 +143,7 @@ Build wallets, block explorers, or bots against any BrowserCoin helper server. T
 - **This is an experiment, not a financial instrument.** Don't put real value on the chain.
 - BRC has no fiat market. The 21M-supply cap exists because the rules are Bitcoin-shaped, not because the token is scarce in any meaningful economic sense.
 - **Helper servers are pluggable and plural.** Both the HTTP API and PeerJS signaling are independent services, each with its own URL list under **Settings → Helper servers**. Reads try every server in health order; writes fan out to all of them. As long as one of either kind is reachable, new browsers can join. Anyone can run their own with `npm run server:api` and/or `npm run server:peerjs`, publish signed helper records, or add URLs manually.
+- **The network does not depend on this project continuing to exist.** Peer discovery also runs over public Nostr relays (**Settings → Signaling substrates**), so every browsercoin.org host can disappear permanently and browsers will still find each other. This is verified, not asserted: with both `api1` and the PeerJS host pointed at nonexistent domains, two fresh tabs still connect and gossip. What *cannot* be removed is the need for some third party to carry the first handshake — a browser has no way to accept an unsolicited connection — so the goal is no *privileged* server rather than no server, which is the same position Bitcoin's DNS seeds occupy.
 
 ## License
 

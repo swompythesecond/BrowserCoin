@@ -13,6 +13,11 @@ import { HistoryBackfill, type BackfillStatus } from './net/backfill.js';
 import type { FastSyncPersistData } from './net/fastSync.js';
 import { getExplorerIndex } from './ui/explorerIndex.js';
 import { loadServerLists, saveServerLists, type ServerLists } from './net/servers.js';
+import {
+  loadSubstrateConfig,
+  saveSubstrateConfig,
+  type SubstrateConfig,
+} from './net/signal/substrates.js';
 import { BROWSERCOIN_NETWORK } from './net/network.js';
 import { loadOrCreateWallet, saveWallet } from './storage/wallet.js';
 import {
@@ -174,6 +179,14 @@ export class Node {
   network: PeerNetwork | null = null;
   serverSync: ServerSync | null = null;
   serverLists: ServerLists;
+  /**
+   * Third-party signaling substrates. Kept separate from `serverLists` because
+   * they are a different kind of thing: `serverLists` are hosts this project
+   * runs, these are networks that exist independently of it. A node with every
+   * entry in `serverLists` unreachable is still fully operational if one
+   * substrate is up.
+   */
+  substrateConfig: SubstrateConfig;
 
   private chainListeners = new Set<ChainListener>();
   private walletListeners = new Set<ChainListener>();
@@ -208,6 +221,7 @@ export class Node {
     this.wallet = loadOrCreateWallet();
     this.activityIndex = new ActivityIndex(this.wallet.address);
     this.serverLists = loadServerLists();
+    this.substrateConfig = loadSubstrateConfig(this.serverLists.signaling);
 
     // Persist every accepted block to IDB so the next page load can fast-restore.
     // Best-effort: failures here don't block consensus.
@@ -842,6 +856,7 @@ export class Node {
         this.lastGossipedTipHex = bytesToHex(this.chain.tip.hash);
       },
       () => this.miner.getStatus().running,
+      this.substrateConfig,
     );
 
     // Persist any peer we successfully see — both directly-connected peers and
@@ -903,9 +918,22 @@ export class Node {
     this.serverLists = lists;
     saveServerLists(lists);
     this.serverSync?.setApiServers(lists.api);
+    this.substrateConfig = { ...this.substrateConfig, peerjs: [...lists.signaling] };
     if (this.network) {
       void this.network.setSignalingServers(lists.signaling);
     }
+  }
+
+  /**
+   * Replace the third-party signaling substrate config (Nostr relays and their
+   * on/off switch). Persists and applies live — unlike a signaling-server
+   * change this does NOT drop existing WebRTC links, because a substrate only
+   * ever brokers introductions and is irrelevant to a connection once it's up.
+   */
+  setSubstrateConfig(cfg: SubstrateConfig): void {
+    this.substrateConfig = cfg;
+    saveSubstrateConfig(cfg);
+    void this.network?.setSubstrateConfig(cfg);
   }
 
   /**

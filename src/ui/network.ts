@@ -119,7 +119,14 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
 
     toggle.textContent = node.network ? 'Disconnect' : 'Reconnect';
     const apiUp = ss?.reachable ?? 0;
+    // A node with a live signalling substrate but no peers yet is looking, not
+    // broken — it has a working way to find the mesh and simply hasn't been
+    // introduced to anyone. Calling that "offline" would be wrong, and would
+    // hide the whole point of running substrates.
+    const substrateUp = ps?.substrates.some((s) => s.up) ?? false;
+    const signalUp = (ps?.signalingServers.some((s) => s.open) ?? false) || substrateUp;
     if (ps?.myId && (ps.connected > 0)) { stateEl.textContent = 'online'; stateEl.className = 'green'; }
+    else if (signalUp) { stateEl.textContent = 'searching for peers'; stateEl.className = 'muted'; }
     else if (apiUp > 0) { stateEl.textContent = 'server-only'; stateEl.className = 'muted'; }
     else { stateEl.textContent = 'offline'; stateEl.className = 'red'; }
     idEl.textContent = ps?.myId ?? '-';
@@ -134,7 +141,15 @@ export function mountNetwork(host: HTMLElement, node: Node): () => void {
         : 'unreachable';
       const sigOpen = ps?.signalingServers.filter((s) => s.open).length ?? 0;
       const sigTotal = ps?.signalingServers.length ?? 0;
-      serverEl.textContent = `${tag} · height ${ss.serverHeight} · ${ss.reachable}/${ss.total} API · ${sigOpen}/${sigTotal} signaling`;
+      // Substrate endpoints are counted alongside the project's own signalling
+      // servers so the two are visibly independent — "0/2 signalling · 4/6
+      // relays" reads as a healthy node, which it is.
+      const subParts = (ps?.substrates ?? []).map((s) => {
+        const up = s.endpoints.filter((e) => e.open).length;
+        return `${up}/${s.endpoints.length} ${s.id}`;
+      });
+      const subText = subParts.length > 0 ? ` · ${subParts.join(' · ')}` : '';
+      serverEl.textContent = `${tag} · height ${ss.serverHeight} · ${ss.reachable}/${ss.total} API · ${sigOpen}/${sigTotal} signaling${subText}`;
       serverEl.className = reachable ? 'green mono' : 'red mono';
     } else {
       serverEl.textContent = '-';

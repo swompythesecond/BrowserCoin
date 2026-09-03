@@ -1,4 +1,4 @@
-import Peer, { type DataConnection } from 'peerjs';
+import Peer from 'peerjs';
 import { CHAIN_ID } from '../chain/genesis.js';
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import type { Blockchain } from '../chain/blockchain.js';
@@ -19,6 +19,10 @@ import {
   encodeHelpersMsg,
   loadCachedHelperRecords,
 } from './helperDiscovery.js';
+import { ICE_SERVERS } from './signal/ice.js';
+import { SignalSwarm } from './signal/swarm.js';
+import { buildTransports, type SubstrateConfig } from './signal/substrates.js';
+import type { PeerConn } from './signal/types.js';
 
 const MAX_PEERS = 8;
 const MIN_PEERS = 3;
@@ -75,26 +79,6 @@ const PEER_STALE_MS = 75_000;
 const SIGNALING_DISCOVERY_PATH = '/peerjs/peerjs/peers';
 const SIGNALING_DISCOVERY_TIMEOUT_MS = 5_000;
 
-/**
- * Public STUN servers used to discover our reflexive (NAT-mapped) address.
- * Without these, browsers behind almost any NAT can't establish direct WebRTC
- * connections — they only know their RFC1918 LAN address, which is useless to
- * a remote peer. STUN lifts the easy-NAT majority into the direct-connect
- * path; the residual (symmetric NAT) is expected to fall back to the manual
- * peer-ID handshake rather than a TURN relay — the project explicitly avoids
- * centralized relay infrastructure.
- *
- * Multiple servers are listed for redundancy; the browser races them. They're
- * STUN-only (lightweight, stateless, no traffic relay), so even though they
- * live at third parties they don't see or carry any chain data.
- */
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-];
-
 export interface SignalingPeerStatus {
   url: string;
   /** True once PeerJS's WebSocket reached `open` for this signaling server. */
@@ -118,6 +102,20 @@ export interface PeerStatus {
   serverForkReadyCount: number;
   /** Per-signaling-server liveness so the UI can show "K/L signaling up." */
   signalingServers: SignalingPeerStatus[];
+  /**
+   * Liveness of the third-party signaling substrates (Nostr relays today).
+   * These are what keep peer discovery working when every PeerJS server this
+   * project operates is unreachable, so the UI surfaces them separately —
+   * "0/2 signaling up, 4/6 relays up" is a healthy node, not a broken one.
+   */
+  substrates: SubstrateStatus[];
+}
+
+export interface SubstrateStatus {
+  id: string;
+  label: string;
+  up: boolean;
+  endpoints: SignalingPeerStatus[];
 }
 
 /**
@@ -146,7 +144,7 @@ export class PeerNetwork {
   /** Single stable peer ID, reused across every Peer instance. */
   private myId: string | null = null;
 
-  private connections = new Map<string, DataConnection>();
+  private connections = new Map<string, PeerConn>();
   /** Total connection ceiling (inbound + outbound); user-tunable in Settings. */
   private maxConnections = configuredMaxConnections();
   /** Wall-clock ms of the last message received from each connected peer. */
@@ -207,6 +205,13 @@ export class PeerNetwork {
   private peerSeenListeners = new Set<(id: string) => void>();
   /** Notified when a dial fails (dead ID) so Node can count failures / evict it. */
   private peerFailedListeners = new Set<(id: string) => void>();
+  /**
+   * Third-party signaling substrates (Nostr relays today), running alongside
+   * PeerJS rather than through it. This is what makes the network survive the
+   * project's own signaling servers going away: PeerJS finds peers when it can,
+   * the swarm finds peers when it can, and either alone is sufficient.
+   */
+  private swarm: SignalSwarm | null = null;
 
   constructor(
     private chain: Blockchain,
@@ -218,6 +223,8 @@ export class PeerNetwork {
     private onUpdate: () => void,
     /** Polled each heartbeat to tell helpers whether this tab is actively mining. */
     private isMining: () => boolean = () => false,
+    /** Which third-party substrates to run. Null disables them entirely. */
+    private substrateConfig: SubstrateConfig | null = null,
   ) {
     this.status = {
       myId: null,
@@ -227,11 +234,32 @@ export class PeerNetwork {
       serverMinersActive: 0,
       serverForkReadyCount: 0,
       signalingServers: signalingServers.map((url) => ({ url, open: false })),
+      substrates: [],
     };
   }
 
   getStatus(): PeerStatus {
-    return { ...this.status, signalingServers: this.status.signalingServers.map((s) => ({ ...s })) };
+    return {
+      ...this.status,
+      signalingServers: this.status.signalingServers.map((s) => ({ ...s })),
+      substrates: this.swarm
+        ? this.swarm.status().map((t) => ({
+            id: t.id,
+            label: t.label,
+            up: t.up,
+            endpoints: t.endpoints.map((e) => ({ url: e.url, open: e.up })),
+          }))
+        : [],
+    };
+  }
+
+  /** Swap the substrate config at runtime (from Settings). Restarts the swarm. */
+  async setSubstrateConfig(cfg: SubstrateConfig): Promise<void> {
+    this.substrateConfig = cfg;
+    this.swarm?.stop();
+    this.swarm = null;
+    if (this.myId) await this.startSwarm();
+    this.emit();
   }
 
   /** Current total connection ceiling. */
@@ -330,29 +358,47 @@ export class PeerNetwork {
   }
 
   async start(): Promise<void> {
-    if (this.signalingServers.length === 0) {
-      // No signaling configured — nothing we can do for new connections. Existing
-      // already-formed connections (if any) would survive, but at startup there
-      // are none. Surface as "not started" and let the caller handle.
-      throw new Error('no signaling servers configured');
-    }
-
-    // One stable ID reused across every signaling Peer instance, so a cached/
-    // shared ID resolves to the same browser regardless of which signaling
-    // server the dialer uses.
+    // One stable ID reused across every signaling Peer instance and by the
+    // substrate swarm, so a cached/shared ID resolves to the same browser
+    // however the dialer reached us — and so both paths dedupe against the
+    // same `connections` map.
     this.myId = PEER_PREFIX + Math.random().toString(36).slice(2, 12);
     this.status.myId = this.myId;
 
-    // Spawn one Peer per signaling server. We resolve start() as soon as the
-    // first one opens — others continue connecting in the background. Reject
-    // only if every single one fails.
-    const opens = this.signalingServers.map((url) => this.spawnPeer(url));
-    await firstSuccess(opens, 'all signaling servers unreachable');
+    // Bring up every signaling path in parallel and require only that ONE of
+    // them works. This is the difference between "the network stops when two
+    // hosts go down" and "the network keeps finding peers regardless": PeerJS
+    // is infrastructure this project pays for, the substrates are networks that
+    // exist whether or not anyone here stays interested, and neither is
+    // load-bearing on its own.
+    const attempts: Array<Promise<unknown>> = [];
 
-    // After at least one signaling Peer is live, kick off the first peer-
-    // discovery dial pass and the periodic background tasks. Signaling
-    // discovery goes first — it's the authoritative dialable set — then the
-    // gossip cache + helper /peers union as a fallback/supplement.
+    if (this.signalingServers.length > 0) {
+      // Spawn one Peer per signaling server; first to open wins. Failures are
+      // swallowed per-promise so a dead server can't raise an unhandled
+      // rejection after `Promise.any` has already settled.
+      const opens = this.signalingServers.map((url) =>
+        this.spawnPeer(url).catch((e: Error) => {
+          console.warn('[peer] signaling', url, 'failed:', e.message);
+          throw e;
+        }),
+      );
+      attempts.push(firstSuccess(opens, 'all signaling servers unreachable'));
+    }
+    attempts.push(this.startSwarm());
+
+    const settled = await Promise.allSettled(attempts);
+    if (!settled.some((r) => r.status === 'fulfilled')) {
+      // Genuinely nothing worked. Existing connections (there are none at
+      // startup) would survive; surface as "not started" and let Node retry.
+      throw new Error('no signalling path available (PeerJS and substrates all failed)');
+    }
+
+    // With at least one path live, kick off the first peer-discovery dial pass
+    // and the periodic background tasks. Signaling discovery goes first — it's
+    // the authoritative dialable set — then the gossip cache + helper /peers
+    // union as a fallback/supplement. Both are no-ops if PeerJS never opened,
+    // in which case the swarm is doing the finding.
     await this.dialFromSignaling();
     await this.dialFromBootstrap();
 
@@ -381,6 +427,34 @@ export class PeerNetwork {
 
     // Send a first heartbeat right away to register ourselves on every API server.
     void this.heartbeat();
+  }
+
+  /**
+   * Bring up the third-party substrate swarm. Resolves once at least one
+   * substrate is usable; rejects if none are (or none are configured), which
+   * `start()` treats as just one failed path among several.
+   */
+  private async startSwarm(): Promise<void> {
+    const cfg = this.substrateConfig;
+    if (!cfg) throw new Error('no substrates configured');
+    const transports = buildTransports(cfg);
+    if (transports.length === 0) throw new Error('no substrates enabled');
+
+    const swarm = new SignalSwarm({
+      selfId: this.myId!,
+      // Stop advertising once we're at the dial target. A well-connected node
+      // that keeps publishing offers just collects links it will immediately
+      // close, and burns relay quota doing it.
+      wantsPeers: () =>
+        this.connections.size + this.dialing.size < Math.min(MAX_PEERS, this.maxConnections),
+      // Both paths share `connections`, so a peer reachable via PeerJS and via
+      // a relay is only ever adopted once.
+      hasPeer: (id) => this.connections.has(id) || this.dialing.has(id),
+      onConnection: (conn) => this.adoptConnection(conn),
+    });
+    await swarm.start(transports);
+    this.swarm = swarm;
+    this.emit();
   }
 
   /**
@@ -483,6 +557,8 @@ export class PeerNetwork {
   }
 
   stop(): void {
+    this.swarm?.stop();
+    this.swarm = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
     if (this.txRebroadcastTimer) clearInterval(this.txRebroadcastTimer);
@@ -543,7 +619,7 @@ export class PeerNetwork {
    * joined after a sender broadcast still learns about the pending tx, and the
    * periodic re-announce costs ~32 B/tx instead of re-flooding full bodies.
    */
-  private announceMempool(to?: DataConnection): void {
+  private announceMempool(to?: PeerConn): void {
     const targets = to ? [to] : [...this.connections.values()];
     if (targets.length === 0) return;
     const hashes = this.mempool.hashes();
@@ -558,7 +634,7 @@ export class PeerNetwork {
    * On hearing a tx hash we don't have, ask the announcing peer for the body —
    * unless we already have it pooled or a `getTx` for it is already outstanding.
    */
-  private requestTxIfMissing(hashHex: string, from: DataConnection): void {
+  private requestTxIfMissing(hashHex: string, from: PeerConn): void {
     if (this.mempool.has(hashHex)) return;
     if (this.requestedTx.has(hashHex)) return;
     this.requestedTx.add(hashHex);
@@ -700,7 +776,7 @@ export class PeerNetwork {
     }
   }
 
-  private adoptConnection(conn: DataConnection): void {
+  private adoptConnection(conn: PeerConn): void {
     conn.on('open', () => {
       // Handshake resolved — release the dial slot (no-op for inbound conns).
       this.releaseDial(conn.peer);
@@ -768,7 +844,7 @@ export class PeerNetwork {
     });
   }
 
-  private onIncoming(conn: DataConnection, msg: ProtoMsg): void {
+  private onIncoming(conn: PeerConn, msg: ProtoMsg): void {
     // Any traffic at all proves the peer is still alive — refresh freshness
     // before dispatch so even a bare pong counts.
     if (this.connections.get(conn.peer) === conn) {
@@ -1006,7 +1082,7 @@ export class PeerNetwork {
    * its parent is unknown. After a successful add, drain any orphans that were
    * waiting on this block (and recursively, those waiting on them).
    */
-  private async handleIncomingBlock(block: Block, from: DataConnection): Promise<void> {
+  private async handleIncomingBlock(block: Block, from: PeerConn): Promise<void> {
     const ownHashHex = bytesToHex(hashHeader(block.header));
     if (this.chain.hasBlock(ownHashHex)) return;
 

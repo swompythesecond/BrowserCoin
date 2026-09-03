@@ -3,6 +3,8 @@ import { generateKeyPair } from '../crypto/keys.js';
 import { CHAIN_VERSION, type Node } from '../node.js';
 import { cardHeader } from './info.js';
 import { defaultServerLists, parseServerInput } from '../net/servers.js';
+import { parseRelayInput } from '../net/signal/substrates.js';
+import { DEFAULT_NOSTR_RELAYS } from '../net/signal/nostr.js';
 import {
   HELPER_DISCOVERY_NETWORK,
   loadCachedHelperRecords,
@@ -86,6 +88,34 @@ https://server2.example"></textarea>
           <button data-w="save-servers">Save server lists</button>
           <button class="ghost" data-w="reset-servers">Reset to defaults</button>
         </div>
+      </section>
+
+      <section class="card col-2" data-mount="substrates">
+        <div data-slot="header"></div>
+        <p class="text-sm muted" style="margin:0 0 12px;">
+          Signaling servers above are run by this project. These are not: they are public
+          networks that already exist for unrelated reasons, borrowed to introduce browsers
+          to each other. Your node publishes a few hundred bytes of connection details, a
+          peer answers, and the relay is out of the picture for good, it never carries chain
+          data. Running both kinds means the network keeps finding peers even if every
+          browsercoin.org host goes away permanently.
+        </p>
+        <label class="row" style="gap:8px;align-items:center;">
+          <input type="checkbox" data-w="nostr-enabled">
+          <span>Use Nostr relays for peer discovery</span>
+        </label>
+        <label class="mt-md">Relay URLs <span class="muted" data-w="relay-count"></span></label>
+        <textarea data-w="relay-list" rows="5" placeholder="wss://relay.example
+wss://relay2.example"></textarea>
+        <div class="text-sm muted mt-sm">
+          One <code>wss://</code> URL per line. Hundreds of public relays exist; more from
+          different operators means fewer ways for peer discovery to be cut off.
+        </div>
+        <div class="row mt-md">
+          <button data-w="save-substrates">Save relays</button>
+          <button class="ghost" data-w="reset-substrates">Reset to defaults</button>
+        </div>
+        <div class="text-sm mt-sm" data-w="substrate-msg"></div>
       </section>
 
       <section class="card col-2" data-mount="advertise">
@@ -193,6 +223,13 @@ https://server2.example"></textarea>
       body: `BrowserCoin is end-to-end peer-to-peer: the chain doesn't live on any one server. Helper servers are optional accelerators that make joining easier:\n\n• API servers store a backup copy of the chain (so a fresh browser can catch up in one round-trip) and help new clients find existing peers.\n\n• Signaling servers broker the initial WebRTC handshake between two browsers so they can form a direct connection.\n\nClients try every server in the list. Writes fan out to all of them in parallel. As long as any one server is reachable, new browsers can join. Anyone can run a helper, the URLs are public.`,
     },
   }));
+  view.querySelector<HTMLElement>('[data-mount="substrates"] [data-slot="header"]')!.replaceWith(cardHeader({
+    title: 'Signaling substrates',
+    info: {
+      title: 'Finding peers without anyone in charge',
+      body: `WebRTC can't bootstrap itself: two browsers that have never met need a few hundred bytes of connection details to reach each other, and a browser has no way to receive them unsolicited. Something always carries that first message.\n\nThe question is only whether that something is a server this project runs. Nostr relays are public, permissionless, operated by hundreds of unrelated people, and already carry far more traffic than we add. Your node encrypts its connection details, publishes them to the relays, and a peer answers. Once the direct link is up the relay is irrelevant to it forever.\n\nNo relay is trusted. A hostile one can decline to introduce you to people, exactly like a bad DNS seed in Bitcoin, but it can never make you accept an invalid block, because every block is still verified locally no matter which path it arrived on.`,
+    },
+  }));
   view.querySelector<HTMLElement>('[data-mount="advertise"] [data-slot="header"]')!.replaceWith(cardHeader({
     title: 'Advertise & discovered helpers',
     info: {
@@ -262,6 +299,49 @@ https://server2.example"></textarea>
     node.setServerLists(defaultServerLists());
     renderServerLists();
     flash(msg, 'Server lists reset to defaults. Network reconnecting.', 'green');
+  });
+
+  // --- Signalling substrates --------------------------------------------
+  const nostrEnabled = view.querySelector<HTMLInputElement>('[data-w="nostr-enabled"]')!;
+  const relayList = view.querySelector<HTMLTextAreaElement>('[data-w="relay-list"]')!;
+  const relayCount = view.querySelector<HTMLElement>('[data-w="relay-count"]')!;
+  const saveSubstratesBtn = view.querySelector<HTMLButtonElement>('[data-w="save-substrates"]')!;
+  const resetSubstratesBtn = view.querySelector<HTMLButtonElement>('[data-w="reset-substrates"]')!;
+  const substrateMsg = view.querySelector<HTMLElement>('[data-w="substrate-msg"]')!;
+
+  const renderSubstrates = (): void => {
+    const cfg = node.substrateConfig;
+    nostrEnabled.checked = cfg.nostrEnabled;
+    relayList.value = cfg.nostr.join('\n');
+    relayCount.textContent = `(${cfg.nostr.length})`;
+  };
+  renderSubstrates();
+
+  saveSubstratesBtn.addEventListener('click', () => {
+    const nostr = parseRelayInput(relayList.value);
+    if (nostrEnabled.checked && nostr.length === 0) {
+      flash(substrateMsg, 'Add at least one wss:// relay URL, or untick the box.', 'red');
+      return;
+    }
+    node.setSubstrateConfig({ ...node.substrateConfig, nostr, nostrEnabled: nostrEnabled.checked });
+    renderSubstrates();
+    flash(
+      substrateMsg,
+      nostrEnabled.checked
+        ? `Saved ${nostr.length} relays. Reconnecting to them now.`
+        : 'Nostr peer discovery turned off.',
+      'green',
+    );
+  });
+
+  resetSubstratesBtn.addEventListener('click', () => {
+    node.setSubstrateConfig({
+      ...node.substrateConfig,
+      nostr: [...DEFAULT_NOSTR_RELAYS],
+      nostrEnabled: true,
+    });
+    renderSubstrates();
+    flash(substrateMsg, 'Relays reset to the defaults shipped with this build.', 'green');
   });
 
   // --- Max peer connections ---------------------------------------------
