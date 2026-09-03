@@ -12,3 +12,4 @@ server/helpers-*.json
 server/backups-*/
 .claude
 *.stackdump
+dist-single/

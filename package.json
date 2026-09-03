@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "server:api": "tsx server/api.ts --port 9000",
-    "server:peerjs": "tsx server/peerjs.ts --port 9001"
+    "server:peerjs": "tsx server/peerjs.ts --port 9001",
+    "build:single": "node scripts/build-single.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",

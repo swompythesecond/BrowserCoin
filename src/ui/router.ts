@@ -22,8 +22,31 @@ export class Router {
   private currentPath = '';
   private navListeners = new Set<(path: string) => void>();
 
+  /**
+   * Hash routing is used when the History API cannot be: a page opened from
+   * the filesystem has origin `null`, and `pushState` to `/settings` throws
+   * because it resolves to `file:///C:/settings`, which is a different
+   * document. The single-file client is exactly that case, and without this it
+   * loads, renders, and then cannot reach a single route.
+   *
+   * Hosted builds keep clean paths, so nothing about the normal site changes.
+   */
+  private readonly useHash = location.protocol === 'file:';
+
   constructor(private host: HTMLElement) {
     window.addEventListener('popstate', () => this.resolve());
+    if (this.useHash) window.addEventListener('hashchange', () => this.resolve());
+  }
+
+  /** Where we are, in whichever scheme this document supports. */
+  private readLocation(): { pathname: string; search: string } {
+    if (!this.useHash) {
+      return { pathname: location.pathname || this.fallback, search: location.search };
+    }
+    const raw = location.hash.slice(1);
+    if (!raw) return { pathname: this.fallback, search: '' };
+    const [pathPart, queryPart] = raw.split('?');
+    return { pathname: pathPart || this.fallback, search: queryPart ? `?${queryPart}` : '' };
   }
 
   route(path: string, mount: RouteHandler): this {
@@ -57,8 +80,15 @@ export class Router {
     // history.
     const [pathPart, queryPart] = path.split('?');
     const search = queryPart ? `?${queryPart}` : '';
-    if (location.pathname === pathPart && location.search === search) {
+    const here = this.readLocation();
+    if (here.pathname === pathPart && here.search === search) {
       this.resolve();
+      return;
+    }
+    if (this.useHash) {
+      // Assigning to `location.hash` fires `hashchange`, which resolves; doing
+      // it here as well would mount the view twice.
+      location.hash = path;
       return;
     }
     history.pushState(null, '', path);
@@ -70,8 +100,8 @@ export class Router {
   }
 
   private resolve(): void {
-    const pathname = location.pathname || this.fallback;
-    const params = new URLSearchParams(location.search);
+    const { pathname, search } = this.readLocation();
+    const params = new URLSearchParams(search);
 
     const match = this.routes.find((r) => r.path === pathname) ?? this.routes.find((r) => r.path === this.fallback);
     if (!match) return;
