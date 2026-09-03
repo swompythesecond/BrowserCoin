@@ -23,6 +23,7 @@ import { ICE_SERVERS } from './signal/ice.js';
 import { SignalSwarm } from './signal/swarm.js';
 import { buildTransports, type SubstrateConfig } from './signal/substrates.js';
 import type { PeerConn } from './signal/types.js';
+import { ManualHandshake } from './signal/manual.js';
 
 const MAX_PEERS = 8;
 const MIN_PEERS = 3;
@@ -102,6 +103,13 @@ export interface PeerStatus {
   serverForkReadyCount: number;
   /** Per-signaling-server liveness so the UI can show "K/L signaling up." */
   signalingServers: SignalingPeerStatus[];
+  /**
+   * True when no automatic signaling path came up: no PeerJS server reachable
+   * and no substrate live. The node is still running and still usable, because
+   * the manual handshake needs no network at all, so this is a degraded state
+   * rather than a stopped one.
+   */
+  signalingDegraded: boolean;
   /**
    * Liveness of the third-party signaling substrates (Nostr relays today).
    * These are what keep peer discovery working when every PeerJS server this
@@ -212,6 +220,12 @@ export class PeerNetwork {
    * the swarm finds peers when it can, and either alone is sufficient.
    */
   private swarm: SignalSwarm | null = null;
+  /**
+   * The human path. Held unconditionally, because it is the one substrate that
+   * cannot be unavailable: it needs no relay, no server of ours, and no
+   * network beyond the two browsers themselves.
+   */
+  private manual: ManualHandshake | null = null;
 
   constructor(
     private chain: Blockchain,
@@ -235,6 +249,7 @@ export class PeerNetwork {
       serverForkReadyCount: 0,
       signalingServers: signalingServers.map((url) => ({ url, open: false })),
       substrates: [],
+      signalingDegraded: false,
     };
   }
 
@@ -260,6 +275,40 @@ export class PeerNetwork {
     this.swarm = null;
     if (this.myId) await this.startSwarm();
     this.emit();
+  }
+
+  // --- Manual handshake -------------------------------------------------
+  //
+  // Signaling by human being. These are thin pass-throughs so the UI never
+  // touches RTCPeerConnection, and they work whenever the node is running,
+  // including when every relay and every server of ours is unreachable.
+
+  /** Step 1, offerer: mint an invite code to send to somebody. */
+  async createManualInvite(): Promise<string> {
+    if (!this.manual) throw new Error('network not started');
+    return this.manual.createInvite();
+  }
+
+  /** Step 2, answerer: read an invite, return the reply code to send back. */
+  async acceptManualInvite(code: string): Promise<string> {
+    if (!this.manual) throw new Error('network not started');
+    return this.manual.acceptInvite(code);
+  }
+
+  /** Step 3, offerer: feed back the reply code to finish the handshake. */
+  async completeManualInvite(code: string): Promise<void> {
+    if (!this.manual) throw new Error('network not started');
+    return this.manual.completeInvite(code);
+  }
+
+  /** Drop the outstanding invite and free the connection behind it. */
+  cancelManualInvite(): void {
+    this.manual?.cancelInvite();
+  }
+
+  /** The invite currently on offer, so the UI can redisplay without regenerating. */
+  currentManualInvite(): string | null {
+    return this.manual?.currentInvite() ?? null;
   }
 
   /** Current total connection ceiling. */
@@ -365,6 +414,14 @@ export class PeerNetwork {
     this.myId = PEER_PREFIX + Math.random().toString(36).slice(2, 12);
     this.status.myId = this.myId;
 
+    // Up before anything that can fail, so it survives everything else failing.
+    this.manual = new ManualHandshake({
+      selfId: this.myId,
+      hasPeer: (id) => this.connections.has(id) || this.dialing.has(id),
+      onConnection: (conn) => this.adoptConnection(conn),
+    });
+    this.manual.start();
+
     // Bring up every signaling path in parallel and require only that ONE of
     // them works. This is the difference between "the network stops when two
     // hosts go down" and "the network keeps finding peers regardless": PeerJS
@@ -388,10 +445,14 @@ export class PeerNetwork {
     attempts.push(this.startSwarm());
 
     const settled = await Promise.allSettled(attempts);
-    if (!settled.some((r) => r.status === 'fulfilled')) {
-      // Genuinely nothing worked. Existing connections (there are none at
-      // startup) would survive; surface as "not started" and let Node retry.
-      throw new Error('no signalling path available (PeerJS and substrates all failed)');
+    // Deliberately does NOT throw when every remote path fails. Throwing would
+    // leave the caller with no PeerNetwork at all, which would remove the
+    // manual handshake in precisely the situation it exists for: every relay
+    // blocked and every host of ours gone. The node stays up, reports the
+    // degraded state, and a human can still introduce it to a peer.
+    this.status.signalingDegraded = !settled.some((r) => r.status === 'fulfilled');
+    if (this.status.signalingDegraded) {
+      console.warn('[peer] no automatic signalling path; manual handshake only');
     }
 
     // With at least one path live, kick off the first peer-discovery dial pass
@@ -557,6 +618,8 @@ export class PeerNetwork {
   }
 
   stop(): void {
+    this.manual?.stop();
+    this.manual = null;
     this.swarm?.stop();
     this.swarm = null;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
