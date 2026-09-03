@@ -1,6 +1,7 @@
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '../../crypto/hash.js';
 import { bytesToHex, hexToBytes } from '../../util/binary.js';
+import { compactFromSdp, sdpFromCompact } from './sdp.js';
 import { BROWSERCOIN_NETWORK } from '../network.js';
 import type {
   OpenOffer,
@@ -100,9 +101,11 @@ export function signalTopic(network: string): string {
 }
 
 /**
- * base64 rather than hex: an SDP offer batch runs to a few KB, and hex doubles
- * it while base64 adds only a third. Over six relays, every 45 seconds, on
- * infrastructure we don't pay for, that difference is worth the ten lines.
+ * base64 rather than hex: hex would double the payload while base64 adds only
+ * a third. Descriptions are already compacted by `sdp.ts` before they get
+ * here, so a four-offer batch is a few hundred bytes rather than several KB;
+ * over six relays every 45 seconds, on infrastructure we don't pay for, both
+ * savings are worth the ten lines.
  * Chunked so a large payload can't blow the argument limit on `fromCharCode`.
  */
 function toBase64(bytes: Uint8Array): string {
@@ -308,21 +311,33 @@ export class NostrTransport implements SignalTransport {
   publishOffers(offers: OpenOffer[]): void {
     this.lastOffers = offers;
     if (offers.length === 0 || !this.ctx) return;
-    void this.publish({
-      v: 1,
-      from: this.ctx.selfId,
-      offers: offers.map((o) => ({ o: o.offerId, s: o.sdp })),
-    });
+    // Compacted here rather than in the dialer: the interface deals in full
+    // descriptions, and how a transport encodes them on its own wire is its
+    // own business. This is the transport paying somebody else's bandwidth
+    // bill, so it is the one that cares.
+    const compact: Array<{ o: string; s: string }> = [];
+    for (const o of offers) {
+      const s = compactFromSdp(o.sdp);
+      if (s) compact.push({ o: o.offerId, s });
+      else console.warn('[nostr] could not compact offer', o.offerId);
+    }
+    if (compact.length === 0) return;
+    void this.publish({ v: 1, from: this.ctx.selfId, offers: compact });
   }
 
   publishAnswer(answer: SignalAnswer): void {
     if (!this.ctx) return;
+    const s = compactFromSdp(answer.sdp);
+    if (!s) {
+      console.warn('[nostr] could not compact answer for', answer.toPeer);
+      return;
+    }
     void this.publish({
       v: 1,
       from: this.ctx.selfId,
       to: answer.toPeer,
       a: answer.offerId,
-      s: answer.sdp,
+      s,
     });
   }
 
@@ -450,14 +465,19 @@ export class NostrTransport implements SignalTransport {
     if (!payload) return;
     if (payload.from === this.ctx.selfId) return; // our own event, echoed back
 
+    // Expand back to a full description before handing it up. A string that
+    // does not decode is a malformed or hostile publisher, not an error worth
+    // logging on every frame, so it is simply skipped.
     if (payload.offers) {
       for (const o of payload.offers) {
-        this.ctx.onOffer(payload.from, o.o, o.s);
+        const sdp = sdpFromCompact(o.s);
+        if (sdp) this.ctx.onOffer(payload.from, o.o, sdp);
       }
       return;
     }
     if (payload.to === this.ctx.selfId && payload.a && payload.s) {
-      this.ctx.onAnswer(payload.from, payload.a, payload.s);
+      const sdp = sdpFromCompact(payload.s);
+      if (sdp) this.ctx.onAnswer(payload.from, payload.a, sdp);
     }
   }
 }

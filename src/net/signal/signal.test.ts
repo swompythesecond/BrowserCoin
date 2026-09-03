@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { schnorr } from '@noble/curves/secp256k1.js';
+import { compactFromSdp } from './sdp.js';
 import { sha256 } from '../../crypto/hash.js';
 import { bytesToHex, hexToBytes } from '../../util/binary.js';
 import { MeshConn } from './meshConn.js';
@@ -257,6 +258,56 @@ describe('nostr signalling envelope', () => {
     // back to hex, which would double what we push at six public relays.
     const plaintextLen = JSON.stringify({ v: 1, from: 'browsercoin-abcdefghij', offers: [0, 1, 2, 3].map((i) => ({ o: `offer${i}`, s: sdp })) }).length;
     expect(sealed.length).toBeLessThan(plaintextLen * 1.5);
+  });
+
+  it('keeps a four-offer announcement small enough to scale past ten thousand nodes', async () => {
+    const k = await key();
+    // A real Chromium data-channel offer, as published by a node with a full
+    // offer pool. Every seeking node receives every other seeking node's
+    // announcements, so this size is what decides the ceiling on network size.
+    const realOffer = [
+      'v=0',
+      'o=- 5100484116977507289 2 IN IP4 127.0.0.1',
+      's=-',
+      't=0 0',
+      'a=group:BUNDLE 0',
+      'a=extmap-allow-mixed',
+      'a=msid-semantic: WMS',
+      'm=application 62955 UDP/DTLS/SCTP webrtc-datachannel',
+      'c=IN IP4 92.208.229.62',
+      'a=candidate:1626842732 1 udp 2113937151 73e69f81-c5ba-4d70-b1db-e9f7d5314221.local 58809 typ host generation 0 network-cost 999',
+      'a=candidate:2002698819 1 udp 1677729535 92.208.229.62 62955 typ srflx raddr 0.0.0.0 rport 0 generation 0 network-cost 999',
+      'a=ice-ufrag:PxS3',
+      'a=ice-pwd:h6IFG6v4gUIDAJEi0vWs1tDn',
+      'a=ice-options:trickle',
+      'a=fingerprint:sha-256 5A:77:21:6C:D5:59:90:8E:6E:A5:28:50:59:2C:53:B8:14:E9:07:5A:A0:BA:7E:40:55:47:25:8E:35:34:A6:B4',
+      'a=setup:actpass',
+      'a=mid:0',
+      'a=sctp-port:5000',
+      'a=max-message-size:262144',
+      '',
+    ].join('\r\n');
+
+    const compact = compactFromSdp(realOffer)!;
+    expect(compact).not.toBeNull();
+
+    const sealed = await sealPayload(k, {
+      v: 1,
+      from: 'browsercoin-abcdefghij',
+      offers: [0, 1, 2, 3].map((i) => ({ o: `offer${i}`, s: compact })),
+    });
+
+    // Publishing full descriptions instead would put this near 4 KB, which is
+    // comfortable into the low thousands of nodes and antisocial beyond that.
+    // Under 1 KB is what moves the ceiling out by an order of magnitude.
+    expect(sealed.length).toBeLessThan(1024);
+    // And the saving is real, not a rounding error.
+    const uncompacted = await sealPayload(k, {
+      v: 1,
+      from: 'browsercoin-abcdefghij',
+      offers: [0, 1, 2, 3].map((i) => ({ o: `offer${i}`, s: realOffer })),
+    });
+    expect(uncompacted.length / sealed.length).toBeGreaterThan(4);
   });
 
   it('builds events a relay will accept: correct id and valid schnorr signature', () => {
