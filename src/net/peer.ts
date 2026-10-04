@@ -845,14 +845,16 @@ export class PeerNetwork {
           // caller's max OR 64 (whichever's smaller) to bound message size.
           const max = Math.max(1, Math.min(64, msg.max | 0));
           const fromHeight = Math.max(0, msg.fromHeight | 0);
-          // iterateCanonical() walks newest-first; collect then reverse so the
-          // response is height-ascending (matches server /blocks behaviour).
+          // iterateCanonical() walks newest-first. Skip blocks above the
+          // requested range before collecting; stopping after max entries from
+          // the tip would serve the wrong range to peers far behind us.
+          // Reverse so the response is height-ascending, retaining at most max
+          // bodies even when the chain is much longer than the requested range.
           const collected: Block[] = [];
           for (const cb of this.chain.iterateCanonical()) {
             if (cb.block.header.height < fromHeight) break;
             if (!cb.hasBody) break; // fast-sync prefix: bodies not downloaded yet
-            collected.push(cb.block);
-            if (collected.length >= max + 32) break; // small over-fetch then trim
+            if (cb.block.header.height < fromHeight + max) collected.push(cb.block);
           }
           collected.reverse();
           const slice = collected.slice(0, max);
@@ -870,11 +872,20 @@ export class PeerNetwork {
           // parking, so even if the first block in the batch has an unknown
           // parent we'll backfill via getBlock on the originating peer.
           void (async () => {
+            const beforeHeight = this.chain.height;
             for (const hex of msg.data) {
               let block: Block;
               try { block = decodeBlock(hexToBytes(hex)); }
               catch { continue; }
               await this.handleIncomingBlock(block, conn);
+            }
+            // A hello starts only the first page. Continue after applying it,
+            // using the validated local height rather than untrusted wire data.
+            // Require progress to avoid a tight loop on empty/invalid batches.
+            if (this.chain.height > beforeHeight && this.chain.height < this.status.bestPeerHeight) {
+              try {
+                conn.send({ t: 'getBlocks', fromHeight: this.chain.height + 1, max: 64 } satisfies ProtoMsg);
+              } catch { /* peer disconnected; a subsequent hello can restart sync */ }
             }
           })();
           break;
