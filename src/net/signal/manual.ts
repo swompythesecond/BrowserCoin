@@ -58,6 +58,8 @@ const PREFIX = 'BC1';
 
 /** Give up ICE gathering after this and use whatever we have. */
 const GATHER_TIMEOUT_MS = 5_000;
+/** After the reply is pasted, ICE checks normally finish within a few seconds. */
+const OPEN_TIMEOUT_MS = 30_000;
 /**
  * How long a half-finished handshake stays alive. Generous compared with the
  * swarm's timers because a human is in the loop: they have to copy a string
@@ -136,7 +138,7 @@ export class ManualHandshake {
 
     let pc: RTCPeerConnection;
     try {
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      pc = newPeerConnection();
     } catch (e) {
       throw new ManualHandshakeError('webrtc-failed', (e as Error).message);
     }
@@ -196,7 +198,7 @@ export class ManualHandshake {
 
     let pc: RTCPeerConnection;
     try {
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      pc = newPeerConnection();
     } catch (e) {
       throw new ManualHandshakeError('webrtc-failed', (e as Error).message);
     }
@@ -224,9 +226,10 @@ export class ManualHandshake {
   }
 
   /**
-   * Step 3, offerer. Feed back the reply code. Resolves once the description
-   * is accepted; the connection itself opens a moment later, and arrives
-   * through `onConnection` like any other.
+   * Step 3, offerer. Feed back the reply code. Resolves only once the data
+   * channel is actually open (the link also arrives through `onConnection`
+   * like any other), and rejects if ICE fails or never gets there, so the UI
+   * never reports a connection that does not exist.
    */
   async completeInvite(codeText: string): Promise<void> {
     const decoded = decodeCode(codeText);
@@ -250,11 +253,21 @@ export class ManualHandshake {
     }
 
     invite.remoteId = peerId;
+    const opened = waitForOpen(invite.dc, invite.pc, OPEN_TIMEOUT_MS);
     try {
       await invite.pc.setRemoteDescription({ type: 'answer', sdp });
     } catch (e) {
       invite.remoteId = undefined;
       throw new ManualHandshakeError('webrtc-failed', (e as Error).message);
+    }
+    if (!(await opened)) {
+      // The invite's connection is spent either way; free it so the UI offers a fresh one.
+      if (this.invite === invite) this.cancelInvite();
+      throw new ManualHandshakeError(
+        'webrtc-failed',
+        'The codes were accepted but no direct link could be opened between your two networks. ' +
+          'Create a new invite and try again, or try again from a different network.',
+      );
     }
   }
 
@@ -372,6 +385,37 @@ function checksum(b: Uint8Array): number {
   return ((s << 8) | a) & 0xffff;
 }
 
+/** A peer connection, or an error a person can act on when the browser has no WebRTC. */
+function newPeerConnection(): RTCPeerConnection {
+  if (typeof RTCPeerConnection === 'undefined') {
+    throw new Error(
+      'This browser cannot make direct connections (WebRTC is missing or switched off). ' +
+        'Try a current Chrome, Edge, Firefox or Safari.',
+    );
+  }
+  return new RTCPeerConnection({ iceServers: ICE_SERVERS });
+}
+
 function closeQuietly(pc: RTCPeerConnection): void {
   try { pc.close(); } catch { /* already gone */ }
+}
+
+/** True once `dc` opens; false if the connection fails, closes, or `ms` passes first. */
+function waitForOpen(dc: RTCDataChannel, pc: RTCPeerConnection, ms: number): Promise<boolean> {
+  if (dc.readyState === 'open') return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (ok: boolean): void => {
+      clearTimeout(timer);
+      dc.removeEventListener('open', onOpen);
+      pc.removeEventListener('connectionstatechange', onState);
+      resolve(ok);
+    };
+    const onOpen = (): void => done(true);
+    const onState = (): void => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') done(false);
+    };
+    const timer = setTimeout(() => done(false), ms);
+    dc.addEventListener('open', onOpen);
+    pc.addEventListener('connectionstatechange', onState);
+  });
 }

@@ -572,13 +572,13 @@ It is a round trip, so both people have to be around at the same time, and codes
   mkInviteBtn.addEventListener('click', async () => {
     if (!node.network) { flash(inviteMsg, 'Network not running.', 'red'); return; }
     mkInviteBtn.disabled = true;
-    flash(inviteMsg, 'Gathering connection details…', 'muted');
+    flash(inviteMsg, 'Gathering connection details…', 'muted', 0);
     try {
       const code = await node.network.createManualInvite();
       showInvite(code);
       flash(inviteMsg, 'Send this code to the other person, then paste their reply below.', 'green');
     } catch (e) {
-      flash(inviteMsg, humanError(e), 'red');
+      flash(inviteMsg, humanError(e), 'red', 0);
     } finally {
       mkInviteBtn.disabled = false;
     }
@@ -597,14 +597,16 @@ It is a round trip, so both people have to be around at the same time, and codes
     const code = replyIn.value.trim();
     if (!code) { flash(inviteMsg, 'Paste the reply code they sent you.', 'red'); return; }
     finishInviteBtn.disabled = true;
-    flash(inviteMsg, 'Connecting…', 'muted');
+    flash(inviteMsg, 'Connecting…', 'muted', 0);
     try {
       await node.network.completeManualInvite(code);
       replyIn.value = '';
       showInvite(null);
       flash(inviteMsg, 'Connected. You are now on the network through that peer.', 'green');
     } catch (e) {
-      flash(inviteMsg, humanError(e), 'red');
+      // A failed open spends the invite; don't leave a dead code on screen to be resent.
+      showInvite(node.network?.currentManualInvite() ?? null);
+      flash(inviteMsg, humanError(e), 'red', 0);
     } finally {
       finishInviteBtn.disabled = false;
     }
@@ -615,7 +617,7 @@ It is a round trip, so both people have to be around at the same time, and codes
     const code = inviteIn.value.trim();
     if (!code) { flash(joinMsg, 'Paste the invite code they sent you.', 'red'); return; }
     acceptInviteBtn.disabled = true;
-    flash(joinMsg, 'Gathering connection details…', 'muted');
+    flash(joinMsg, 'Gathering connection details…', 'muted', 0);
     try {
       const reply = await node.network.acceptManualInvite(code);
       replyOut.value = reply;
@@ -623,7 +625,7 @@ It is a round trip, so both people have to be around at the same time, and codes
       inviteIn.value = '';
       flash(joinMsg, 'Send this reply back to them. You connect as soon as they paste it.', 'green');
     } catch (e) {
-      flash(joinMsg, humanError(e), 'red');
+      flash(joinMsg, humanError(e), 'red', 0);
     } finally {
       acceptInviteBtn.disabled = false;
     }
@@ -742,13 +744,15 @@ It is a round trip, so both people have to be around at the same time, and codes
   return () => { unsubNet(); unsubChain(); };
 }
 
-function flash(el: HTMLElement, text: string, cls: 'green' | 'red' | 'muted'): void {
+/** Show a status line; it clears itself after `ms`, or stays until replaced when `ms` is 0. */
+function flash(el: HTMLElement, text: string, cls: 'green' | 'red' | 'muted', ms = 4000): void {
   el.textContent = text;
   el.className = `text-sm ${cls}`;
+  if (ms <= 0) return;
   setTimeout(() => {
     if (el.textContent === text) {
       el.textContent = '';
       el.className = 'text-sm muted';
     }
-  }, 4000);
+  }, ms);
 }
