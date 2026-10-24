@@ -12,7 +12,7 @@ import type { Router } from './router.js';
 import { maxMinerWorkers } from '../miner/controller.js';
 import { renderAddressQr } from './qr.js';
 import { openScanner } from './qrScanner.js';
-import { isMiningOffline, openOfflineModal } from './miner.js';
+import { isMiningOffline, openConnectModal, openOfflineModal } from './miner.js';
 import { openPipMiner, pipMinerSupported } from './pip-miner.js';
 
 const PREVIEW_ROWS = 5;
@@ -134,6 +134,7 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
           <dt>Height</dt><dd data-w="height" class="mono">-</dd>
           <dt>Server</dt><dd data-w="server" class="mono">-</dd>
         </dl>
+        <button class="ghost small mt-md" data-w="connect-code">Connect with a code</button>
       </section>
 
       <section class="card col-6" data-mount="explorer">
@@ -319,6 +320,8 @@ export function mountHome(host: HTMLElement, node: Node, router: Router): () => 
 
   const netStateEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="state"]')!;
   const netPeersEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="peers"]')!;
+  view.querySelector<HTMLButtonElement>('[data-mount="network"] [data-w="connect-code"]')!
+    .addEventListener('click', () => openConnectModal(node));
   const netMinersEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="miners"]')!;
   const netHeightEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="height"]')!;
   const netServerEl = view.querySelector<HTMLElement>('[data-mount="network"] [data-w="server"]')!;

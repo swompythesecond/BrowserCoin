@@ -7,6 +7,7 @@ import { bytesToHex } from '../util/binary.js';
 import { TICKER } from '../brand.js';
 import { cardHeader } from './info.js';
 import { openPipMiner, pipMinerSupported } from './pip-miner.js';
+import { MANUAL_CONNECT_HTML, mountManualConnect } from './manualConnect.js';
 
 const THREADS_KEY = 'browsercoin:miner-threads';
 const THROTTLE_KEY = 'browsercoin:miner-throttle';
@@ -673,6 +674,11 @@ export interface OfflineModalOpts {
   primary?: { label: string; onClick: () => void };
   /** Label for the dismiss button. Defaults to "Close". */
   dismissLabel?: string;
+  /**
+   * Close by itself once the tab is back online. Right for the "you're
+   * offline" popups; wrong when someone opened it on purpose while online.
+   */
+  autoClose?: boolean;
 }
 
 /**
@@ -685,18 +691,29 @@ export function isOfflineModalOpen(): boolean {
   return openModal !== null;
 }
 
+/** Open the connect-with-a-code modal on purpose, whatever the network state. */
+export function openConnectModal(node: Node): void {
+  openOfflineModal(node, {
+    title: 'Connect with a code',
+    description: 'Connect straight to someone, with no server in between. Show them your code ' +
+      '(QR or text) and put theirs in the second box. One connection is enough: your node ' +
+      'finds everyone else through them.',
+    autoClose: false,
+  });
+}
+
 /**
- * Modal shown when the tab is fully offline (no peers + no server). Surfaces
- * the user's peer ID for out-of-band sharing and a paste-in to dial a
- * friend's peer. Used both:
- *   - on startup, the moment we determine the bootstrap server is unreachable
- *     (gives the user a way to join the network anyway), and
+ * Modal shown when the tab is fully offline (no peers + no server), and the
+ * one place to connect by hand. Leads with the connect-with-a-code card,
+ * which needs no server or relay of any kind, so it works in exactly the
+ * situation that opens this modal. Dialing a peer ID sits below it, folded:
+ * that only works while a signaling server is reachable. Used:
+ *   - on startup, the moment we determine nothing is reachable,
  *   - when the user tries to start mining while offline (with a "mine anyway"
- *     override added).
+ *     override added), and
+ *   - from "Connect with a code" buttons, opened on purpose (`autoClose: false`).
  *
- * The peer-ID display live-updates as PeerJS finishes establishing — the user
- * might dismiss before that happens, but if they wait we'll show the real ID
- * the moment it's available.
+ * The peer-ID display live-updates as PeerJS finishes establishing.
  */
 export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void {
   if (openModal) return; // already open; don't stack
@@ -704,26 +721,33 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
   const description = opts.description ??
     "You're not connected to any peers and the bootstrap server is unreachable. " +
     "Without a connection, this tab can't receive new blocks, send transactions, or join the network. " +
-    "Paste a peer's ID below to link directly, or check your internet connection.";
+    "Connect straight to someone with a code below (no server needed), or check your internet connection.";
   const dismissLabel = opts.dismissLabel ?? 'Close';
+  const autoClose = opts.autoClose ?? true;
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal">
+    <div class="modal modal-wide">
       <h3 style="margin:0 0 8px;">${escapeHtml(title)}</h3>
       <p class="text-sm muted" style="margin:0 0 16px;">${escapeHtml(description)}</p>
-      <p class="text-sm" style="margin:0 0 6px;"><b>Your network ID</b> (share it with a friend over Discord, Signal, etc.):</p>
-      <div class="row" style="margin-bottom:14px;">
-        <input data-w="my" readonly value="(network not running yet)" />
-        <button class="ghost small" data-w="copy" disabled>Copy</button>
-      </div>
-      <p class="text-sm" style="margin:0 0 6px;"><b>Connect to a peer by ID:</b></p>
-      <div class="row" style="margin-bottom:6px;">
-        <input data-w="dial" placeholder="browsercoin-xxxxxxxxxx" />
-        <button data-w="dial-btn">Connect</button>
-      </div>
-      <div class="text-sm" data-w="msg" style="min-height:1.2em;"></div>
+      ${MANUAL_CONNECT_HTML}
+      <p class="text-sm red" style="margin:12px 0 0;">Codes include your public IP address. Swap them in a DM, not a public channel.</p>
+      <details class="modal-more">
+        <summary class="text-sm">Have a peer ID instead?</summary>
+        <p class="text-sm muted" style="margin:8px 0 6px;">Only works while a signaling server is reachable.</p>
+        <p class="text-sm" style="margin:0 0 6px;"><b>Your network ID:</b></p>
+        <div class="row" style="margin-bottom:14px;">
+          <input data-w="my" readonly value="(network not running yet)" />
+          <button class="ghost small" data-w="copy" disabled>Copy</button>
+        </div>
+        <p class="text-sm" style="margin:0 0 6px;"><b>Connect to a peer by ID:</b></p>
+        <div class="row" style="margin-bottom:6px;">
+          <input data-w="dial" placeholder="browsercoin-xxxxxxxxxx" />
+          <button data-w="dial-btn">Connect</button>
+        </div>
+        <div class="text-sm" data-w="msg" style="min-height:1.2em;"></div>
+      </details>
       <div class="row" style="justify-content:flex-end; gap:8px; margin-top:18px;">
         <button class="ghost" data-w="dismiss">${escapeHtml(dismissLabel)}</button>
         ${opts.primary ? `<button class="ghost danger" data-w="primary">${escapeHtml(opts.primary.label)}</button>` : ''}
@@ -732,12 +756,14 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
   `;
   document.body.appendChild(overlay);
   openModal = overlay;
+  const unmountManual = mountManualConnect(overlay.querySelector<HTMLElement>('.modal')!, node);
 
   let dismissing = false;
   const close = (): void => {
     dismissing = true;
     overlay.remove();
     openModal = null;
+    unmountManual();
     unsubNet();
     unsubServer();
   };
@@ -774,7 +800,11 @@ export function openOfflineModal(node: Node, opts: OfflineModalOpts = {}): void 
   // re-entrancy from the successful-dial flow, which closes itself.
   const onConnChange = (): void => {
     renderId();
-    if (!dismissing && !isMiningOffline(node)) close();
+    if (autoClose && !dismissing && !isMiningOffline(node)) {
+      // Back online. Pause so a "Connected" from the code card is seen, not flashed.
+      dismissing = true;
+      setTimeout(close, 1500);
+    }
   };
   renderId();
   const unsubNet = node.network?.onStatus(onConnChange) ?? (() => {});

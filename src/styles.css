@@ -1337,6 +1337,9 @@ label {
   color: var(--text);
   border-color: var(--accent);
 }
+.sync-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 10px; }
+.sync-dismiss.sync-connect { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sync-dismiss.sync-connect:hover { background: var(--accent-2); border-color: var(--accent-2); }
 .sync-advanced {
   margin-top: 20px;
   padding-top: 16px;
@@ -1466,6 +1469,11 @@ label {
   color: var(--text);
 }
 .modal h3 { font-size: 1.05rem; font-weight: 600; }
+/* Room for the two-column connect card; scrolls on short screens. */
+.modal.modal-wide { max-width: 760px; max-height: calc(100vh - 48px); overflow-y: auto; }
+@media (max-width: 760px) { .modal.modal-wide .mc-grid { grid-template-columns: minmax(0, 1fr); } }
+.modal-more { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.modal-more summary { cursor: pointer; color: var(--muted); }
 .modal input[readonly] { font-family: var(--mono); font-size: 0.85rem; }
 
 /* ============ Landing page (`/`) ============

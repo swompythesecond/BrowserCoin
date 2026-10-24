@@ -234,6 +234,8 @@ export function mountManualConnect(card: HTMLElement, node: Node, startCode?: st
   const onPaste = (ev: ClipboardEvent): void => {
     const file = [...(ev.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
     if (!file) return;
+    // With the modal open over Settings, two cards are mounted: only the top one takes it.
+    if (!card.closest('.modal-overlay') && document.querySelector('.modal-overlay')) return;
     ev.preventDefault();
     void useImage(file);
   };

@@ -7,7 +7,7 @@ import { Node, formatAmount } from './node.js';
 import { mountLanding } from './ui/landing.js';
 import { mountHome } from './ui/home.js';
 import { mountWallet } from './ui/wallet.js';
-import { mountMiner, openOfflineModal, isOfflineModalOpen } from './ui/miner.js';
+import { mountMiner, openOfflineModal, openConnectModal, isOfflineModalOpen } from './ui/miner.js';
 import { maxMinerWorkers } from './miner/controller.js';
 import { mountExplorer } from './ui/explorer.js';
 import { mountScripts } from './ui/scripts.js';
@@ -235,7 +235,7 @@ const PHASE_SUB: Record<string, string> = {
     'Fetching a compact snapshot of every balance and verifying it against the header chain\'s state commitment. The snapshot can\'t be forged without redoing the chain\'s proof-of-work.',
   ready:      '',
   offline:
-    'The bootstrap server is unreachable and no peers have answered. You can continue with your last cached state. Syncing keeps retrying in the background, and mining unlocks once the chain catches up.',
+    'The bootstrap server is unreachable and no peers have answered. Connect with a code from someone who is online, or continue with your last cached state. Syncing keeps retrying in the background, and mining unlocks once the chain catches up.',
 };
 
 function wireSyncOverlay(n: Node): void {
@@ -248,6 +248,16 @@ function wireSyncOverlay(n: Node): void {
   const overlayDismiss = document.querySelector<HTMLButtonElement>('[data-sync-dismiss]')!;
 
   overlayDismiss.addEventListener('click', () => n.dismissSyncOverlay());
+
+  // While no network has answered, the fastest way in is often a friend's code.
+  // Offered from the first second, not only after the offline timeout, and it
+  // steps the overlay aside so the code card is usable.
+  const overlayConnect = document.querySelector<HTMLButtonElement>('[data-sync-connect]')!;
+  overlayConnect.addEventListener('click', () => {
+    // Open first: dismissing arms the offline popup, which would otherwise win.
+    openConnectModal(n);
+    n.dismissSyncOverlay();
+  });
 
   // Live "verification cores" control on the sync overlay. This is the moment it
   // actually matters — the chain is being verified right now, behind this overlay
@@ -346,6 +356,7 @@ function wireSyncOverlay(n: Node): void {
     overlayTitle.textContent = PHASE_TITLE[s.phase] ?? 'Connecting';
     overlaySub.textContent = PHASE_SUB[s.phase] ?? '';
     overlayDismiss.hidden = !s.canDismiss;
+    overlayConnect.hidden = s.phase !== 'connecting' && s.phase !== 'offline';
     // Only surface the cores control while we're actually pulling/verifying the
     // chain — it's meaningless during local-cache replay or the connect phase.
     overlayAdvanced.hidden = s.phase !== 'verifying' && s.phase !== 'fetching';
