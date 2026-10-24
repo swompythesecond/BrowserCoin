@@ -301,6 +301,16 @@ export class PeerNetwork {
     return this.manual.completeInvite(code);
   }
 
+  /** True once the manual handshake can be used (it comes up first in `start`). */
+  manualReady(): boolean {
+    return this.manual !== null;
+  }
+
+  /** Whether we currently hold a link to this peer, by any route. */
+  isConnectedTo(id: string): boolean {
+    return this.connections.has(id);
+  }
+
   /** Drop the outstanding invite and free the connection behind it. */
   cancelManualInvite(): void {
     this.manual?.cancelInvite();

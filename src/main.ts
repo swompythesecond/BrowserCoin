@@ -490,7 +490,7 @@ router
   .route('/about',      (host, params) => mountAbout(host, params, router))
   .route('/highlights', (host) => mountHighlights(host))
   .route('/developers', (host) => mountDevelopers(host))
-  .route('/settings',   (host) => mountSettings(host, ensureNode()))
+  .route('/settings',   (host, params) => mountSettings(host, ensureNode(), params))
   .setFallback('/');
 // Once the node is live the brand mark belongs to the app, not the pitch.
 wireNav(router, { homePath: () => (node ? APP_HOME : '/') });

@@ -2,6 +2,7 @@ import { exportWalletJson, importWalletJson } from '../storage/wallet.js';
 import { generateKeyPair } from '../crypto/keys.js';
 import { CHAIN_VERSION, type Node } from '../node.js';
 import { cardHeader } from './info.js';
+import { CONNECT_PARAM, MANUAL_CONNECT_HTML, mountManualConnect } from './manualConnect.js';
 import { defaultServerLists, parseServerInput } from '../net/servers.js';
 import { parseRelayInput } from '../net/signal/substrates.js';
 import { DEFAULT_NOSTR_RELAYS } from '../net/signal/nostr.js';
@@ -22,7 +23,7 @@ import { encodeBlock } from '../chain/block.js';
 import { bytesToHex } from '../util/binary.js';
 import { VERIFY_CORES_KEY, maxVerifierCores, configuredVerifierCores } from '../chain/verifierPool.js';
 
-export function mountSettings(host: HTMLElement, node: Node): () => void {
+export function mountSettings(host: HTMLElement, node: Node, params: URLSearchParams = new URLSearchParams()): () => void {
   const view = document.createElement('div');
   view.className = 'view';
   view.innerHTML = `
@@ -199,41 +200,14 @@ wss://relay2.example"></textarea>
       <section class="card col-2" data-mount="manual">
         <div data-slot="header"></div>
         <p class="text-sm muted" style="margin:0 0 12px;">
-          The last resort, and the one nobody can switch off. Two browsers connect by two
-          people passing a short code between them, over any channel at all: a chat message,
-          an email, a photo of a screen. No relay, no server of ours, nothing in the middle
-          to block. You only ever need to do this once, because after one connection your
-          node learns about other peers from the peer it just met.
+          Connect to someone directly, with no server and no relay in between. Show them
+          your code (QR or text), and put theirs in the second box. After one connection your
+          node finds everyone else through them.
         </p>
-        <p class="text-sm red" style="margin:0 0 12px;">
-          Your code contains your public IP address. Fine with someone you know. Think twice
-          before pasting it into a public channel.
+        ${MANUAL_CONNECT_HTML}
+        <p class="text-sm red" style="margin:12px 0 0;">
+          Codes include your public IP address. Swap them in a DM, not a public channel.
         </p>
-
-        <label>1. Invite someone</label>
-        <div class="row">
-          <button data-w="mk-invite">Create invite code</button>
-          <button class="ghost small" data-w="copy-invite" disabled>Copy</button>
-          <button class="ghost small" data-w="cancel-invite" disabled>Cancel</button>
-        </div>
-        <textarea data-w="invite-out" class="mono" rows="3" readonly
-          placeholder="Your invite code appears here. Send it to the other person."></textarea>
-        <label class="mt-md">2. Paste the reply they send back</label>
-        <div class="row">
-          <input data-w="reply-in" placeholder="BC1..." />
-          <button data-w="finish-invite">Connect</button>
-        </div>
-        <div class="text-sm mt-sm" data-w="invite-msg"></div>
-
-        <label class="mt-md">Or join someone else's invite</label>
-        <div class="row">
-          <input data-w="invite-in" placeholder="BC1..." />
-          <button data-w="accept-invite">Generate reply</button>
-          <button class="ghost small" data-w="copy-reply" disabled>Copy</button>
-        </div>
-        <textarea data-w="reply-out" class="mono" rows="3" readonly
-          placeholder="Your reply code appears here. Send it back to them to finish."></textarea>
-        <div class="text-sm mt-sm" data-w="join-msg"></div>
       </section>
 
     </div>
@@ -532,106 +506,16 @@ It is a round trip, so both people have to be around at the same time, and codes
 
   // --- Manual handshake --------------------------------------------------
   //
-  // Signalling by human being. Deliberately usable when nothing else is: the
-  // buttons work whenever the node is running, including with every relay and
-  // every server of ours unreachable.
-  const mkInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="mk-invite"]')!;
-  const copyInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="copy-invite"]')!;
-  const cancelInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="cancel-invite"]')!;
-  const inviteOut = view.querySelector<HTMLTextAreaElement>('[data-w="invite-out"]')!;
-  const replyIn = view.querySelector<HTMLInputElement>('[data-w="reply-in"]')!;
-  const finishInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="finish-invite"]')!;
-  const inviteMsg = view.querySelector<HTMLElement>('[data-w="invite-msg"]')!;
-  const inviteIn = view.querySelector<HTMLInputElement>('[data-w="invite-in"]')!;
-  const acceptInviteBtn = view.querySelector<HTMLButtonElement>('[data-w="accept-invite"]')!;
-  const replyOut = view.querySelector<HTMLTextAreaElement>('[data-w="reply-out"]')!;
-  const copyReplyBtn = view.querySelector<HTMLButtonElement>('[data-w="copy-reply"]')!;
-  const joinMsg = view.querySelector<HTMLElement>('[data-w="join-msg"]')!;
-
-  /** Errors from the handshake already carry a sentence meant for a person. */
-  const humanError = (e: unknown): string => {
-    const m = e instanceof Error ? e.message : String(e);
-    return m || 'Something went wrong.';
-  };
-
-  const copyTo = (btn: HTMLButtonElement, text: string): void => {
-    void navigator.clipboard.writeText(text).then(() => {
-      const old = btn.textContent;
-      btn.textContent = 'Copied!';
-      setTimeout(() => (btn.textContent = old), 1200);
-    });
-  };
-
-  const showInvite = (code: string | null): void => {
-    inviteOut.value = code ?? '';
-    copyInviteBtn.disabled = !code;
-    cancelInviteBtn.disabled = !code;
-  };
-  showInvite(node.network?.currentManualInvite() ?? null);
-
-  mkInviteBtn.addEventListener('click', async () => {
-    if (!node.network) { flash(inviteMsg, 'Network not running.', 'red'); return; }
-    mkInviteBtn.disabled = true;
-    flash(inviteMsg, 'Gathering connection details…', 'muted', 0);
-    try {
-      const code = await node.network.createManualInvite();
-      showInvite(code);
-      flash(inviteMsg, 'Send this code to the other person, then paste their reply below.', 'green');
-    } catch (e) {
-      flash(inviteMsg, humanError(e), 'red', 0);
-    } finally {
-      mkInviteBtn.disabled = false;
-    }
-  });
-
-  copyInviteBtn.addEventListener('click', () => copyTo(copyInviteBtn, inviteOut.value));
-
-  cancelInviteBtn.addEventListener('click', () => {
-    node.network?.cancelManualInvite();
-    showInvite(null);
-    flash(inviteMsg, 'Invite cancelled.', 'muted');
-  });
-
-  finishInviteBtn.addEventListener('click', async () => {
-    if (!node.network) { flash(inviteMsg, 'Network not running.', 'red'); return; }
-    const code = replyIn.value.trim();
-    if (!code) { flash(inviteMsg, 'Paste the reply code they sent you.', 'red'); return; }
-    finishInviteBtn.disabled = true;
-    flash(inviteMsg, 'Connecting…', 'muted', 0);
-    try {
-      await node.network.completeManualInvite(code);
-      replyIn.value = '';
-      showInvite(null);
-      flash(inviteMsg, 'Connected. You are now on the network through that peer.', 'green');
-    } catch (e) {
-      // A failed open spends the invite; don't leave a dead code on screen to be resent.
-      showInvite(node.network?.currentManualInvite() ?? null);
-      flash(inviteMsg, humanError(e), 'red', 0);
-    } finally {
-      finishInviteBtn.disabled = false;
-    }
-  });
-
-  acceptInviteBtn.addEventListener('click', async () => {
-    if (!node.network) { flash(joinMsg, 'Network not running.', 'red'); return; }
-    const code = inviteIn.value.trim();
-    if (!code) { flash(joinMsg, 'Paste the invite code they sent you.', 'red'); return; }
-    acceptInviteBtn.disabled = true;
-    flash(joinMsg, 'Gathering connection details…', 'muted', 0);
-    try {
-      const reply = await node.network.acceptManualInvite(code);
-      replyOut.value = reply;
-      copyReplyBtn.disabled = false;
-      inviteIn.value = '';
-      flash(joinMsg, 'Send this reply back to them. You connect as soon as they paste it.', 'green');
-    } catch (e) {
-      flash(joinMsg, humanError(e), 'red', 0);
-    } finally {
-      acceptInviteBtn.disabled = false;
-    }
-  });
-
-  copyReplyBtn.addEventListener('click', () => copyTo(copyReplyBtn, replyOut.value));
+  // Signalling by human being. Deliberately usable when nothing else is: it
+  // works whenever the node is running, including with every relay and every
+  // server of ours unreachable. An invite link lands here as ?connect=<code>.
+  const connectCode = params.get(CONNECT_PARAM) ?? undefined;
+  if (connectCode && location.protocol !== 'file:') history.replaceState(null, '', location.pathname);
+  const unmountManual = mountManualConnect(
+    view.querySelector<HTMLElement>('[data-mount="manual"]')!,
+    node,
+    connectCode,
+  );
 
   renderId();
   const unsubNet = node.network?.onStatus(() => renderId()) ?? (() => {});
@@ -741,7 +625,7 @@ It is a round trip, so both people have to be around at the same time, and codes
     }
   });
 
-  return () => { unsubNet(); unsubChain(); };
+  return () => { unsubNet(); unsubChain(); unmountManual(); };
 }
 
 /** Show a status line; it clears itself after `ms`, or stays until replaced when `ms` is 0. */
