@@ -1,5 +1,6 @@
 import { exportWalletJson, importWalletJson } from '../storage/wallet.js';
 import { generateKeyPair } from '../crypto/keys.js';
+import { tr } from '../i18n/translate.js';
 import { CHAIN_VERSION, type Node } from '../node.js';
 import { cardHeader } from './info.js';
 import { defaultServerLists, parseServerInput } from '../net/servers.js';
@@ -258,7 +259,7 @@ https://server2.example"></textarea>
   });
 
   resetServersBtn.addEventListener('click', () => {
-    if (!confirm('Reset both server lists to the defaults shipped with this build?')) return;
+    if (!confirm(tr('Reset both server lists to the defaults shipped with this build?'))) return;
     node.setServerLists(defaultServerLists());
     renderServerLists();
     flash(msg, 'Server lists reset to defaults. Network reconnecting.', 'green');
@@ -427,7 +428,7 @@ https://server2.example"></textarea>
   });
 
   newKeyBtn.addEventListener('click', () => {
-    if (!confirm('Generate a new wallet? You will lose access to the current one unless you exported it.')) return;
+    if (!confirm(tr('Generate a new wallet? You will lose access to the current one unless you exported it.'))) return;
     const kp = generateKeyPair();
     node.setWallet(kp);
     flash(msg, 'New wallet generated.', 'green');
@@ -493,7 +494,7 @@ https://server2.example"></textarea>
   const clearCacheBtn = view.querySelector<HTMLButtonElement>('[data-w="clear-cache"]')!;
   const clearMsg = view.querySelector<HTMLElement>('[data-w="clear-msg"]')!;
   clearCacheBtn.addEventListener('click', async () => {
-    if (!confirm('Clear the local chain cache and reload? Your wallet stays, but every cached block will be re-pulled from the helper servers on next startup.')) return;
+    if (!confirm(tr('Clear the local chain cache and reload? Your wallet stays, but every cached block will be re-pulled from the helper servers on next startup.'))) return;
     clearCacheBtn.disabled = true;
     flash(clearMsg, 'Clearing IndexedDB…', 'muted');
     try {
@@ -510,11 +511,16 @@ https://server2.example"></textarea>
   return () => { unsubNet(); unsubChain(); };
 }
 
+const flashSeq = new WeakMap<HTMLElement, number>();
 function flash(el: HTMLElement, text: string, cls: 'green' | 'red' | 'muted'): void {
+  // Track by sequence number, not by comparing textContent: the translator may
+  // have rewritten the text, so it would never equal `text` again.
+  const seq = (flashSeq.get(el) ?? 0) + 1;
+  flashSeq.set(el, seq);
   el.textContent = text;
   el.className = `text-sm ${cls}`;
   setTimeout(() => {
-    if (el.textContent === text) {
+    if (flashSeq.get(el) === seq) {
       el.textContent = '';
       el.className = 'text-sm muted';
     }

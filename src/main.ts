@@ -21,6 +21,8 @@ import { Router, wireNav } from './ui/router.js';
 import { TICKER } from './brand.js';
 import { hasWallet } from './storage/wallet.js';
 import { VERIFY_CORES_KEY, maxVerifierCores, configuredVerifierCores } from './chain/verifierPool.js';
+import { initI18n } from './i18n/translate.js';
+import { mountLangPicker } from './i18n/picker.js';
 
 // ============ Node lifecycle ============
 //
@@ -478,6 +480,12 @@ function formatEtaSeconds(s: number): string {
     history.replaceState(null, '', `/wallet?to=${encodeURIComponent(to)}`);
   }
 }
+
+// Translation runs off a document observer, so it has to be watching before the
+// first view mounts. English needs no download; the other dictionaries are
+// lazy chunks, and anything rendered before one arrives is swept on arrival.
+void initI18n();
+mountLangPicker(document.querySelector<HTMLElement>('[data-lang-host]')!);
 
 router
   .route('/',           (host) => mountLanding(host, router))
