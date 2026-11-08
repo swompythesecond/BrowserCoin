@@ -20,7 +20,7 @@ export function mountLangPicker(host: HTMLElement): void {
   const select = wrap.querySelector('select')!;
   select.value = currentLang();
   select.addEventListener('change', () => {
-    if (isLangCode(select.value)) void setLang(select.value);
+    if (isLangCode(select.value)) void setLang(select.value, true);
   });
   onLangChange((l) => { select.value = l; });
   host.appendChild(wrap);

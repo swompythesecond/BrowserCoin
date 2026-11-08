@@ -22,7 +22,8 @@ export const LANGUAGES: readonly Language[] = [
   { code: 'fr', native: 'Français', htmlLang: 'fr' },
 ];
 
-export const LANG_KEY = 'browsercoin:lang';
+// Renamed from 'browsercoin:lang', which also stored auto-detected picks.
+export const LANG_KEY = 'browsercoin:lang-choice';
 
 export function isLangCode(v: unknown): v is LangCode {
   return LANGUAGES.some((l) => l.code === v);

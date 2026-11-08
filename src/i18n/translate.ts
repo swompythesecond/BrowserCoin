@@ -183,7 +183,12 @@ export function onLangChange(cb: (l: LangCode) => void): () => void {
   return () => listeners.delete(cb);
 }
 
-export async function setLang(next: LangCode): Promise<void> {
+/**
+ * Switch language. `remember` is true only for an explicit pick in the menu:
+ * an auto-detected language is never saved, so it keeps following the
+ * browser's language until the person chooses one themselves.
+ */
+export async function setLang(next: LangCode, remember = false): Promise<void> {
   if (next !== 'en' && !compiled.has(next)) {
     try {
       compiled.set(next, compile((await loaders[next]()).default));
@@ -194,7 +199,9 @@ export async function setLang(next: LangCode): Promise<void> {
   }
   lang = next;
   active = next === 'en' ? null : compiled.get(next)!;
-  try { localStorage.setItem(LANG_KEY, next); } catch { /* not persisted, still applied */ }
+  if (remember) {
+    try { localStorage.setItem(LANG_KEY, next); } catch { /* not persisted, still applied */ }
+  }
   document.documentElement.lang = LANGUAGES.find((l) => l.code === next)!.htmlLang;
   // One pass over everything rewrites the page in place, in either direction:
   // English recovery goes through `reverse` and the per-node records.
