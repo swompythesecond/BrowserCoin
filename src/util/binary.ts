@@ -1,14 +1,22 @@
 /** Hex / binary helpers, small, dependency-free. */
 
-const HEX_CHARS = '0123456789abcdef';
+const HEX_CODES = new TextEncoder().encode('0123456789abcdef');
+const LATIN1 = new TextDecoder('latin1');
 
+/**
+ * Write ASCII hex digits into a byte buffer and decode once. Building the
+ * string with `s += ...` per byte leaves V8 a rope of ~2 cons-string nodes per
+ * byte (~25x the flat size); long-lived results like the API's per-block hex
+ * cache then cost ~2 GB at h≈100k instead of ~80 MB. Decoding yields a flat string.
+ */
 export function bytesToHex(bytes: Uint8Array): string {
-  let s = '';
+  const out = new Uint8Array(bytes.length * 2);
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i]!;
-    s += HEX_CHARS[b >>> 4]! + HEX_CHARS[b & 0x0f]!;
+    out[i * 2] = HEX_CODES[b >>> 4]!;
+    out[i * 2 + 1] = HEX_CODES[b & 0x0f]!;
   }
-  return s;
+  return LATIN1.decode(out);
 }
 
 export function hexToBytes(hex: string): Uint8Array {
